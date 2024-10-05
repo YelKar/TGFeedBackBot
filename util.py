@@ -1,4 +1,9 @@
+import re
 from telebot import types
+
+
+POST_ID_TEMPLATE = "@{username}#{chat_id}-{message_id}"
+POST_ID_REGEXP = re.compile(r"^@(?P<username>\w+)#(?P<user_id>\d+)-(?P<message_id>\d+)")
 
 CONTENT_TYPES = [
     'text',
