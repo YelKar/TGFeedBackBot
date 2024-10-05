@@ -26,7 +26,7 @@ source ./venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Создаем .env
+### 3. Создаем .env
 ```ini
 TOKEN=<TELEGRAM_TOKEN>
 CHAT_ID=<FEEDBACK_CHAT_ID>
@@ -40,3 +40,8 @@ CHANNEL_ID=<CHANNEL_ID>
    - Если чат одиночный, Вам нужно первыми начать переписку.
 3) ID канала, в котором бот имеет роль админа.
 
+
+### 4. Запускаем
+```bash
+python bot.py
+```
