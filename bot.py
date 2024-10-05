@@ -23,13 +23,21 @@ bot = TeleBot(TOKEN, parse_mode='HTML')
 
 @bot.message_handler(commands=['start'])
 def start(message: types.Message):
-    bot.send_message(message.chat.id, answers['start_prefix'])
+    print(message.chat.id, message.text)
+
+    if message.chat.id != FEEDBACK_CHAT_ID:
+        bot.send_message(message.chat.id, answers['start_prefix'])
     help_(message)
-    bot.send_message(message.chat.id, answers['start_suffix'])
+    if message.chat.id != FEEDBACK_CHAT_ID:
+        bot.send_message(message.chat.id, answers['start_suffix'])
 
 
 @bot.message_handler(commands=['help'])
 def help_(message: types.Message):
+    if message.chat.id == FEEDBACK_CHAT_ID:
+        bot.send_message(message.chat.id, answers['feedback_chat_help'].format(bot=bot.get_me().username))
+    else:
+        bot.send_message(message.chat.id, answers['user_help'])
     bot.send_message(message.chat.id, answers['help'])
 
 
