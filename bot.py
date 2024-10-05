@@ -77,19 +77,27 @@ def new_proposal(message: types.Message):
 
     if message.chat.id != FEEDBACK_CHAT_ID:
         new_proposal_message = bot.forward_message(FEEDBACK_CHAT_ID, message.chat.id, message.message_id)
+        post_id = util.POST_ID_TEMPLATE.format(
+            username=message.from_user.username,
+            chat_id=message.chat.id,
+            message_id=message.message_id
+        )
 
         bot.send_message(
             FEEDBACK_CHAT_ID,
             answers["got_proposal"].format(
                 username=message.from_user.username,
-                post_id=util.POST_ID_TEMPLATE.format(
-                    username=message.from_user.username,
-                    chat_id=message.chat.id,
-                    message_id=message.message_id
-                )
+                post_id=post_id,
             ),
             reply_markup=util.POST_CONTROL_KEYBOARD,
             reply_to_message_id=new_proposal_message.id,
+        )
+
+        bot.send_message(
+            message.chat.id,
+            answers["sent_proposal"].format(
+                post_id=post_id,
+            ),
         )
 
         logger.info(f"User {message.from_user.username} sent the post for moderation")
@@ -105,6 +113,16 @@ def public_post(call: types.CallbackQuery):
             call.message.id,
         )
     bot.forward_message(CHANNEL_ID, call.message.chat.id, call.message.message_id - 1)
+
+    msg_info_match = util.POST_ID_REGEXP.match(call.message.text)
+    channel = bot.get_chat(CHANNEL_ID)
+    bot.send_message(
+        msg_info_match.group('user_id'),
+        answers["post_published"].format(
+            post_id=call.message.text.split("\n")[0],
+            channel=CHANNEL_ID if channel.username is None else ("@" + (channel.username or "")),
+        )
+    )
 
     logger.info(f"Moderator {call.from_user.username} published the post {call.message.text.split("\n")[0]}")
 
