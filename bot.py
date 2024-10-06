@@ -1,8 +1,7 @@
 import os
-import re
 
-import telebot
-from loguru import logger
+from logger import logger
+
 
 if __name__ == '__main__':
     from dotenv import load_dotenv
@@ -33,7 +32,7 @@ bot = TeleBot(TOKEN, parse_mode='HTML')
 
 @bot.message_handler(commands=['start'])
 def start(message: types.Message):
-    logger.info(f"User {message.from_user.id} started a conversation")
+    logger.info(f"User @{message.from_user.username}#{message.from_user.id} started a conversation")
 
     if message.chat.id != FEEDBACK_CHAT_ID:
         bot.send_message(message.chat.id, answers['start_prefix'])
@@ -50,7 +49,7 @@ def help_(message: types.Message):
         bot.send_message(message.chat.id, answers['user_help'])
     bot.send_message(message.chat.id, answers['help'])
 
-    logger.info(f"User {message.from_user.id} got a support message")
+    logger.info(f"User @{message.from_user.username}#{message.from_user.id} got a support message")
 
 
 @bot.message_handler(
@@ -69,7 +68,8 @@ def return_proposal(message: types.Message):
             f"{message.text}\n",
             reply_to_message_id=msg_info_match.group('message_id')
         )
-        logger.info(f"Moderator @{message.from_user.username} sent a message to the author @{msg_info_match.group('username')}")
+        logger.info(f"Moderator @{message.from_user.username}#{message.from_user.id} "
+                    f"sent a message to the author @{msg_info_match.group('username')}#{msg_info_match.group('user_id')}")
 
 
 @bot.message_handler(content_types=util.CONTENT_TYPES)
@@ -100,7 +100,7 @@ def new_proposal(message: types.Message):
             ),
         )
 
-        logger.info(f"User {message.from_user.username} sent the post for moderation")
+        logger.info(f"User @{message.from_user.username}#{message.from_user.id} sent the post for moderation")
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "public_post" and call.message.chat.id == FEEDBACK_CHAT_ID)
@@ -124,7 +124,7 @@ def public_post(call: types.CallbackQuery):
         )
     )
 
-    logger.info(f"Moderator {call.from_user.username} published the post {call.message.text.split("\n")[0]}")
+    logger.info(f"Moderator @{call.from_user.username}#{call.from_user.username} published the post {call.message.text.split("\n")[0]}")
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "reject_post" and call.message.chat.id == FEEDBACK_CHAT_ID)
@@ -138,7 +138,7 @@ def reject_post(call: types.CallbackQuery):
             reply_markup=util.POST_CONTROL_KEYBOARD,
         )
 
-    logger.info(f"Moderator {call.from_user.username} rejected the post {call.message.text.split("\n")[0]}")
+    logger.info(f"Moderator @{call.from_user.username}#{call.from_user.id} rejected the post {call.message.text.split("\n")[0]}")
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "delete_post" and call.message.chat.id == FEEDBACK_CHAT_ID)
@@ -146,7 +146,7 @@ def delete_post(call: types.CallbackQuery):
     bot.delete_message(call.message.chat.id, call.message.message_id-1)
     bot.delete_message(call.message.chat.id, call.message.message_id)
 
-    logger.info(f"Moderator {call.from_user.username} deleted the post {call.message.text.split("\n")[0]}")
+    logger.info(f"Moderator @{call.from_user.username}#{call.from_user.id} deleted the post {call.message.text.split("\n")[0]}")
 
 
 logger.info("Bot launching")
