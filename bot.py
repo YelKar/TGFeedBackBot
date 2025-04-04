@@ -164,5 +164,6 @@ def delete_post(call: types.CallbackQuery):
     logger.info(f"Moderator @{call.from_user.username}#{call.from_user.id} deleted the post {post_id}")
 
 
-logger.info("Bot launching")
-bot.infinity_polling()
+if __name__ == '__main__':
+    logger.info("Bot launching")
+    bot.infinity_polling()
