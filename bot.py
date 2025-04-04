@@ -1,6 +1,7 @@
 import os
 
 import callback_keyboard
+from callback_keyboard import CallbackTypes
 from logger import logger
 
 if __name__ == '__main__':
@@ -102,14 +103,23 @@ def new_proposal(message: types.Message):
         logger.info(f"User @{message.from_user.username}#{message.from_user.id} sent the post for moderation")
 
 
+def check_callback(callback_type: str):
+    def g(call: types.CallbackQuery):
+        match = callback_keyboard.RegularExpressions.callback.fullmatch(call.data)
+        return match is not None and match.group("callback") == callback_type and call.message.chat.id == FEEDBACK_CHAT_ID
+    return g
+
+
 @bot.callback_query_handler(
-    func=lambda call:
-        callback_keyboard.RegularExpressions.callback.fullmatch(call.data)
-        and call.message.chat.id == FEEDBACK_CHAT_ID
+    func=check_callback(CallbackTypes.publish),
 )
 def public_post(call: types.CallbackQuery):
     if util.POST_STATES['published'].format(username=call.from_user.username) not in call.message.text:
-        bot.forward_message(CHANNEL_ID, call.message.chat.id, call.message.message_id - 1)
+        forwarded_message = bot.forward_message(FEEDBACK_CHAT_ID, call.message.chat.id, call.message.message_id - 1)
+        text = forwarded_message.html_text
+        bot.delete_message(forwarded_message.chat.id, forwarded_message.message_id)
+        bot.send_message(CHANNEL_ID, text)
+        bot.answer_callback_query(call.id, "Пост опубликован:\n\n" + forwarded_message.text)
 
         msg_info_match = util.POST_ID_REGEXP.match(call.message.text)
         channel = bot.get_chat(CHANNEL_ID)
@@ -132,16 +142,15 @@ def public_post(call: types.CallbackQuery):
     logger.info(f"Moderator @{call.from_user.username}#{call.from_user.username} published the post {post_id}")
 
 
+
 @bot.callback_query_handler(
-    func=lambda call:
-        callback_keyboard.RegularExpressions.callback.fullmatch(call.data)
-        and call.message.chat.id == FEEDBACK_CHAT_ID
+    func=check_callback(CallbackTypes.reject),
 )
 def reject_post(call: types.CallbackQuery):
     if util.POST_STATES['rejected'].format(username=call.from_user.username) not in call.message.text:
         bot.edit_message_text(
             call.message.html_text
-            + f"\n<b>{util.POST_STATES['rejected'].format(username=call.from_user.username)}</b>",
+            + f"\n<b><u>{util.POST_STATES['rejected'].format(username=call.from_user.username)}</u></b>",
             call.message.chat.id,
             call.message.id,
             reply_markup=callback_keyboard.create_post_control_keyboard(call.from_user.username, call.message.chat.id, call.message.message_id)
@@ -149,12 +158,11 @@ def reject_post(call: types.CallbackQuery):
 
     post_id = call.message.text.split("\n")[0]
     logger.info(f"Moderator @{call.from_user.username}#{call.from_user.id} rejected the post {post_id}")
+    bot.answer_callback_query(call.id, "Пост отклонён")
 
 
 @bot.callback_query_handler(
-    func=
-        lambda call: callback_keyboard.RegularExpressions.callback.fullmatch(call.data)
-        and call.message.chat.id == FEEDBACK_CHAT_ID
+    func=check_callback(CallbackTypes.delete),
 )
 def delete_post(call: types.CallbackQuery):
     bot.delete_message(call.message.chat.id, call.message.message_id-1)
@@ -162,6 +170,7 @@ def delete_post(call: types.CallbackQuery):
 
     post_id = call.message.text.split("\n")[0]
     logger.info(f"Moderator @{call.from_user.username}#{call.from_user.id} deleted the post {post_id}")
+    bot.answer_callback_query(call.id, "Пост удалён")
 
 
 if __name__ == '__main__':

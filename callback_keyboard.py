@@ -8,6 +8,11 @@ class RegularExpressions:
     callback = re.compile(r"(?P<callback>\w+)<@(?P<username>\w+)#(?P<user_id>-?\d+):(?P<message_id>-?\d+)(?P<group>\[(?:&\w+)+])?>")
     callback_group_ids = re.compile(r"&(\w+)")
 
+class CallbackTypes:
+    publish = "publish_post"
+    reject = "reject_post"
+    delete = "delete_post"
+
 class Callback:
     def __init__(self, callback_data: str):
         callback_match = RegularExpressions.callback.fullmatch(callback_data)
@@ -33,9 +38,9 @@ def create_post_control_keyboard(username: str, user_id: int, message_id: int, m
     else:
         post_info = f"<@{username}#{user_id}:{message_id}[&{'&'.join(media_ids)}]>"
 
-    public_btn = types.InlineKeyboardButton("Опубликовать", callback_data='public_post' + post_info)
-    reject_btn = types.InlineKeyboardButton("Отклонить", callback_data='reject_post' + post_info)
-    delete_btn = types.InlineKeyboardButton("Удалить", callback_data='delete_post' + post_info)
+    public_btn = types.InlineKeyboardButton("Опубликовать", callback_data=CallbackTypes.publish + post_info)
+    reject_btn = types.InlineKeyboardButton("Отклонить", callback_data=CallbackTypes.reject + post_info)
+    delete_btn = types.InlineKeyboardButton("Удалить", callback_data=CallbackTypes.delete + post_info)
     post_control_keyboard.add(public_btn)
     post_control_keyboard.add(reject_btn, delete_btn)
     return post_control_keyboard
