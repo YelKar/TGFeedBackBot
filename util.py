@@ -28,4 +28,3 @@ POST_STATES = {
     "rejected": "Отклонено: @{username}",
     "published": "Опубликовано: @{username}",
 }
-

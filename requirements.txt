@@ -1,3 +1,5 @@
 python-dotenv
 pytelegrambotapi
 loguru
+ydb
+yandexcloud
