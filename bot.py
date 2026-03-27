@@ -361,26 +361,27 @@ def vote(by: User, on: Message, user_vote: int, callback_query_id: int | None = 
 
     not_voted = [f"@{a}" for a in admins if f"@{a}" not in voted]
 
-    hidden_btns = [CallbackTypes.publish, CallbackTypes.published]
+    hidden_btns = [CallbackTypes.publish, CallbackTypes.published, CallbackTypes.reject, CallbackTypes.delete]
 
     is_guaranteed_approved = res["min_avg"] >= THRESHOLD
     is_guaranteed_rejected = res["max_avg"] < THRESHOLD
 
     if res["is_final"]:
+        # Все проголосовали - убираем кнопки выбора цифр
         hidden_btns.append(CallbackTypes.vote)
         if res["avg"] >= THRESHOLD:
-            new_text += "\n✅ <b>Одобрено по голосам</b>"
-            hidden_btns.remove(CallbackTypes.published)
+            new_text += "\n<b>Одобрено по голосам</b>"
+            hidden_btns.remove(CallbackTypes.published)  # Показываем кнопку отметки публикации
+            hidden_btns.append(CallbackTypes.block)
         else:
-            new_text += "\n❌ <b>Отклонено по голосам</b>"
+            new_text += "\n<b>Отклонено по голосам</b>"
     else:
-
+        # Голосование продолжается
         if is_guaranteed_approved:
-            new_text += "\n⚠️ <b>Математически одобрено</b> (можно в отложку)"
+            new_text += "\n<b>Предварительно одобрено</b>"
             hidden_btns.remove(CallbackTypes.published)
         elif is_guaranteed_rejected:
-            new_text += "\n⚠️ <b>Математически отклонено</b>"
-            pass
+            new_text += "\n<b>Предварительно отклонено</b>"
 
     kb = callback_keyboard.create_post_control_keyboard(
         on.from_user.username, on.chat.id, on.message_id,
