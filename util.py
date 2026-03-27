@@ -27,5 +27,7 @@ CONTENT_TYPES = [
 POST_STATES = {
     "rejected": "Отклонено: @{username}",
     "published": "Опубликовано: @{username}",
+    "blocked": "Заблокирован @{username}",
+    "vote": "@{username} проголосовал: ",
+    "marked_as_published": "@{username} отметил как опубликованное"
 }
-
