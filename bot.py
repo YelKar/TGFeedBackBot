@@ -69,7 +69,6 @@ def vote_by_message(message: types.Message):
         return
 
     if len(other) == 0:
-        send_control_message(message, message.id)
         return
 
     number = other[0]
@@ -283,10 +282,41 @@ def block_user(call: types.CallbackQuery):
             f"Moderator @{call.from_user.username}#{call.from_user.id} blocked user @{callback_data.username}#{user_id_to_block}")
 
 
+@bot.callback_query_handler(
+    func=check_callback(CallbackTypes.vote),
+)
+def vote_by_kb(call: types.CallbackQuery):
+    callback_data = callback_keyboard.Callback(call.data)
+    logger.info(f"User @{callback_data.username}#{callback_data.user_id} voted {callback_data.vote}")
+
+    vote(call.from_user, call.message, int(callback_data.vote), call.id)
+
 import re
 
 THRESHOLD = 3.5
 VOTE_BOUNDS = (1, 5)
+K = 0.5
+
+
+def robust_mean(values: list[float], k: float, iters: int = 5) -> float:
+    if not values:
+        return 0.0
+
+    current = sum(values) / len(values)
+
+    for _ in range(iters):
+        sum_w = 0.0
+        sum_wx = 0.0
+
+        for x in values:
+            d = abs(x - current)
+            w = 1.0 / (1.0 + (d / k) ** 2)
+            sum_w += w
+            sum_wx += w * x
+
+        current = sum_wx / sum_w
+
+    return current
 
 
 def update_message_rating(text: str, username: str, vote: int, total_admins: int) -> dict:
@@ -297,53 +327,44 @@ def update_message_rating(text: str, username: str, vote: int, total_admins: int
     votes_dict = {}
     if match:
         raw_block = match.group(0)
-
         found_votes = re.findall(r"(@\w+):\s*([\d.]+)", raw_block)
         for u, v in found_votes:
             votes_dict[u] = float(v)
-
         base_text = text[:match.start()].strip()
     else:
-
         base_text = text.split("\n\nОценка")[0].split("\nПрогноз:")[0].strip()
 
     votes_dict[clean_username] = float(vote)
 
     voted_count = len(votes_dict)
-    current_sum = sum(votes_dict.values())
     remaining_count = max(0, total_admins - voted_count)
 
-    avg_score = current_sum / voted_count
+    values = list(votes_dict.values())
+    estimation = robust_mean(values, K)
+    avg = sum(values) / len(values)
 
-    min_possible_avg = (current_sum + (remaining_count * VOTE_BOUNDS[0])) / total_admins
+    min_values = values + [VOTE_BOUNDS[0]] * remaining_count
+    max_values = values + [VOTE_BOUNDS[1]] * remaining_count
 
-    max_possible_avg = (current_sum + (remaining_count * VOTE_BOUNDS[1])) / total_admins
+    min_possible_estimation = robust_mean(min_values, K)
+    max_possible_estimation = robust_mean(max_values, K)
 
     votes_list = ", ".join([f"{u}: {v:g}" for u, v in votes_dict.items()])
 
-    new_text = f"{base_text}\n\nОценка {avg_score:g} ({votes_list})"
+    new_text = f"{base_text}\n\nОценка {estimation:g} ({votes_list})"
 
     if remaining_count > 0:
-        new_text += f"\nПрогноз: {min_possible_avg:.2g} — {max_possible_avg:.2g} (осталось: {remaining_count})"
+        new_text += f"\nПрогноз: {min_possible_estimation:.2g} — {max_possible_estimation:.2g} (осталось: {remaining_count})"
 
     return {
         "text": new_text,
-        "avg": avg_score,
-        "min_avg": min_possible_avg,
-        "max_avg": max_possible_avg,
+        "estimation": estimation,
+        "avg": avg,
+        "min_estimation": min_possible_estimation,
+        "max_estimation": max_possible_estimation,
         "voted_users": list(votes_dict.keys()),
         "is_final": remaining_count <= 0
     }
-
-
-@bot.callback_query_handler(
-    func=check_callback(CallbackTypes.vote),
-)
-def vote_by_kb(call: types.CallbackQuery):
-    callback_data = callback_keyboard.Callback(call.data)
-    logger.info(f"User @{callback_data.username}#{callback_data.user_id} voted {callback_data.vote}")
-
-    vote(call.from_user, call.message, int(callback_data.vote), call.id)
 
 
 def vote(by: User, on: Message, user_vote: int, callback_query_id: int | None = None):
@@ -363,20 +384,18 @@ def vote(by: User, on: Message, user_vote: int, callback_query_id: int | None = 
 
     hidden_btns = [CallbackTypes.publish, CallbackTypes.published, CallbackTypes.reject, CallbackTypes.delete]
 
-    is_guaranteed_approved = res["min_avg"] >= THRESHOLD
-    is_guaranteed_rejected = res["max_avg"] < THRESHOLD
+    is_guaranteed_approved = res["min_estimation"] >= THRESHOLD
+    is_guaranteed_rejected = res["max_estimation"] < THRESHOLD
 
     if res["is_final"]:
-        # Все проголосовали - убираем кнопки выбора цифр
         hidden_btns.append(CallbackTypes.vote)
-        if res["avg"] >= THRESHOLD:
+        if res["estimation"] >= THRESHOLD:
             new_text += "\n<b>Одобрено по голосам</b>"
-            hidden_btns.remove(CallbackTypes.published)  # Показываем кнопку отметки публикации
+            hidden_btns.remove(CallbackTypes.published)
             hidden_btns.append(CallbackTypes.block)
         else:
             new_text += "\n<b>Отклонено по голосам</b>"
     else:
-        # Голосование продолжается
         if is_guaranteed_approved:
             new_text += "\n<b>Предварительно одобрено</b>"
             hidden_btns.remove(CallbackTypes.published)
