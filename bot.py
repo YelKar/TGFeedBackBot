@@ -1,7 +1,7 @@
 import os
 import time
 
-from telebot.types import Message, User
+from telebot.types import Message, User, ReactionTypeEmoji
 
 import callback_keyboard
 from blocker import Blocker, create_connection
@@ -24,6 +24,8 @@ FEEDBACK_CHAT_ID = int(os.getenv('CHAT_ID'))
 DIRECT_CHAT_ID = int(os.getenv('DIRECT_CHAT_ID'))
 CHANNEL_ID = os.getenv('CHANNEL_ID')
 assert FEEDBACK_CHAT_ID != 0, "env variable 'CHAT_ID' must be set"
+assert DIRECT_CHAT_ID != 0, "env variable 'DIRECT_CHAT_ID' must be set"
+assert CHANNEL_ID is not None, "env variable 'CHANNEL_ID' must be set"
 
 bot = TeleBot(TOKEN, parse_mode='HTML')
 
@@ -90,6 +92,7 @@ def vote_by_message(message: types.Message):
 
 
 @bot.message_handler(
+    commands=['ask'],
     func=lambda message:
     message.chat.id == FEEDBACK_CHAT_ID
     and message.reply_to_message is not None
@@ -100,11 +103,15 @@ def return_proposal(message: types.Message):
             bot.get_me().id == message.reply_to_message.from_user.id
             and msg_info_match is not None
     ):
+        text = message.text[4:].strip()
+        if text == "":
+            return
         bot.send_message(
             msg_info_match.group('user_id'),
-            f"{message.text}\n",
+            f"{text}\n",
             reply_to_message_id=msg_info_match.group('message_id')
         )
+        bot.set_message_reaction(message.chat.id, message.message_id, [ReactionTypeEmoji("👌")])
         logger.info(f"Moderator @{message.from_user.username}#{message.from_user.id} "
                     f"sent a message to the author @{msg_info_match.group('username')}#{msg_info_match.group('user_id')}")
 
@@ -221,6 +228,10 @@ def mark_as_published_post(call: types.CallbackQuery):
             call.message.chat.id,
             call.message.id,
         )
+        msg_info_match = util.POST_ID_REGEXP.match(call.message.text)
+        user_id = msg_info_match.group("user_id")
+        message_id = msg_info_match.group("message_id")
+        bot.set_message_reaction(user_id, message_id, [ReactionTypeEmoji("👍")])
 
     post_id = call.message.text.split("\n")[0]
     logger.info(

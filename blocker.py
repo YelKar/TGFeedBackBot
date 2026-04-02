@@ -25,7 +25,7 @@ def create_connection() -> ydb.Driver:
 
 
 class Blocker:
-    def __init__(self, driver: ydb.Driver):
+    def __init__(self, driver: ydb.Driver):  # TODO сделать с учётом тёплого запуска
         self.session_pool = ydb.SessionPool(driver)
 
     def block(self, user_id: int) -> None:
