@@ -2,3 +2,4 @@ python-dotenv
 pytelegrambotapi
 loguru
 ydb
+ydb[yc]

@@ -1,19 +1,18 @@
-from bot import bot
+import json
+
 import telebot
-from json import JSONDecodeError
+
+from bot import bot
 
 
 def handler(event, context):
-    try:
-        message = telebot.types.Update.de_json(event['body'])
-    except JSONDecodeError:
-        return {
-            'statusCode': 400,
-            'body': "Неверный запрос"
-        }
+    if 'messages' in event:
+        return {'statusCode': 200}
 
-    bot.process_new_updates([message])
-    return {
-        'statusCode': 200,
-        'body': "OK",
-    }
+    if 'body' in event:
+        body = json.loads(event['body'])
+        update = telebot.types.Update.de_json(body)
+        bot.process_new_updates([update])
+        return {'statusCode': 200, 'body': 'ok'}
+
+    return {'statusCode': 400}
