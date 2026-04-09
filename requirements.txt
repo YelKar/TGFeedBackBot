@@ -3,3 +3,4 @@ pytelegrambotapi
 loguru
 ydb
 ydb[yc]
+PySocks
