@@ -1,70 +1,90 @@
+import os
+import telebot
+from telebot import types
 from telebot.types import ReactionTypeEmoji, Message
+telebot.apihelper.proxy = {'https': 'socks5h://127.0.0.1:12334'}
 
+# Загрузка переменных окружения для локального запуска
 if __name__ == '__main__':
     import dotenv
 
     dotenv.load_dotenv()
 
-import os
-
-import telebot
-from telebot import types
-
 from db import Database
 from logger import logger
-from bot_util import refresh_admin_message, FEEDBACK_CHAT_ID, update_queue, handle_exception, publish_post
+from bot_util import (
+    refresh_admin_message,
+    FEEDBACK_CHAT_ID,
+    update_queue,
+    handle_exception,
+    apply_action
+)
+
+# Настройка прокси (для локальной разработки)
+# proxy_url = 'socks5h://127.0.0.1:12334'  # Используем socks5h для DNS через прокси
+# telebot.apihelper.proxy = {'https': proxy_url}
 
 TOKEN = os.getenv('TOKEN')
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
+
+# Удаляем вебхук только при локальном запуске
 if __name__ == '__main__':
     bot.delete_webhook()
+
 db = Database()
 
-
-def is_admin(user_id):
-    return bot.get_chat_member(FEEDBACK_CHAT_ID, user_id).status in ['creator', 'administrator']
-
+# --- Константы текстов ---
 
 USER_HELP = """
-<b><u>Справка:</u></b>
-Все сообщения, отправленные в данном чате, за исключением основных команд, будут направлены в чат модерации и, в случае одобрения, будут опубликованы.
+<b><u>СПРАВКА</u></b>
+Все сообщения, отправленные в этом чате, будут направлены модераторам.
 
-<b>Как это работает</b>:
- ⟹ Ты отправляешь сообщение, а модераторы проверяют его перед публикацией.
- ⟸ Модерация может ответить на твоё сообщение, если нужно что-то уточнить.
+<b>КАК ЭТО РАБОТАЕТ</b>
+ ⟹ Отправь сообщение — модераторы проверят его.
+ ⟸ Модератор может задать вопрос — ответь на него функцией "Ответить" (Reply).
 
+<b>ФОРМАТ ЦИТАТ</b>
+<blockquote>Текст цитаты</blockquote>
+© Автор
 
-Мы очень просим тебя <b><u>присылать правильно отформатированные цитаты</u></b>. Саму фразу оберни в блок цитаты. Далее сделай два переноса строки и, после символа ©, напиши имя автора.
-
-Вот пример: 
-
-<blockquote>Вот сюда помести текст своей цитаты</blockquote>
-
-© Имя автора
-
-<b>Команды:</b>
-/start — Начать работу с ботом.
-/help — Показать эту справку.
+<b>КОМАНДЫ</b>
+/start — Начать.
+/help — Эта справка.
 """
 
 MODERATOR_HELP = """
-<b><u>Справка:</u></b>
-<b>Управление постом (использовать как ответ на пост):</b>
-/vote [1-5] — Проголосовать за пост (если кнопки скрыты).
-/edit [текст] — Изменить текст предложенного поста.
-/ask [текст] — Задать вопрос автору сообщения.
-/reject — Отклонить пост и убрать его из очереди.
-/publish — Опубликовать пост в канал немедленно.
-/block — Заблокировать автора навсегда.
-/use — Создать новый пост из любого сообщения в чате.
+<b><u>СПРАВКА МОДЕРАТОРА</u></b>
+(Использовать как ответ на сообщение в этом чате)
 
-<b>Управление очередью:</b>
-/queue — Пересчитать расписание и обновить время публикации во всех карточках.
+<b>УПРАВЛЕНИЕ ПОСТОМ</b>
+/vote [1-5] — Проголосовать (если кнопки скрыты).
+/edit [текст] — Изменить текст цитаты.
+/ask [текст] — Задать вопрос автору.
+/schedule — Принудительно одобрить и поставить в очередь.
+/reject — Отклонить или убрать из очереди.
+/publish — Опубликовать в канал НЕМЕДЛЕННО.
+/block — Забанить автора навсегда.
+/use — Сделать предложку из любого сообщения.
+
+<b>ОЧЕРЕДЬ</b>
+/queue — Пересчитать расписание и обновить сообщения.
 """
 
 
+# --- Хелперы ---
+
+def is_admin(user_id):
+    try:
+        status = bot.get_chat_member(FEEDBACK_CHAT_ID, user_id).status
+        return status in ['creator', 'administrator']
+    except:
+        return False
+
+
+# --- Базовые хендлеры ---
+
 @bot.message_handler(commands=['help'])
-def help_(message):
+def help_cmd(message: Message):
     if message.chat.id == FEEDBACK_CHAT_ID:
         bot.send_message(message.chat.id, MODERATOR_HELP)
     else:
@@ -72,197 +92,187 @@ def help_(message):
 
 
 @bot.message_handler(commands=['start'])
-def start(message):
-    bot.send_message(message.chat.id, "Привет! Это бот предложки нашего канала")
-    help_(message)
+def start_cmd(message: Message):
+    bot.send_message(message.chat.id, "Привет! Это бот предложки.")
+    help_cmd(message)
 
+
+# --- Прием сообщений от пользователей ---
 
 @bot.message_handler(func=lambda m: m.chat.id != FEEDBACK_CHAT_ID, content_types=['text'])
-def handle_user_message(message):
+def handle_user_message(message: Message):
     if db.is_blocked(message.from_user.id):
         return
 
+    # Если это ответ на вопрос бота (диалог)
     if message.reply_to_message and message.reply_to_message.from_user.id == bot.get_me().id:
         dialogue = db.get_dialogue(message.reply_to_message.id)
-
         if dialogue:
-            post_ref = f"<code>{dialogue.post_id}</code>"
-
             bot.send_message(
                 FEEDBACK_CHAT_ID,
                 f"<b>ОТВЕТ АВТОРА @{message.from_user.username}</b>\n"
-                f"(По посту {post_ref})\n\n"
+                f"(По посту <code>{dialogue.post_id}</code>)\n\n"
                 f"{message.text}",
                 reply_to_message_id=dialogue.admin_msg_id,
                 parse_mode='HTML'
             )
-            bot.reply_to(message, "ОТВЕТ ПЕРЕДАН")
+            bot.reply_to(message, "ПЕРЕДАНО")
             return
 
+    # Иначе создаем новый пост
     new_proposal(message)
 
 
-def new_proposal(message):
+def new_proposal(message: Message):
     if db.is_blocked(message.from_user.id):
         return
 
     post_id = f"{message.chat.id}-{message.message_id}"
-
     db.create_post(post_id, message.from_user.id, message.from_user.username, message.html_text)
 
+    # Создаем клавиатуру (всегда с 1-5 и Отклонить в начале)
     kb = types.InlineKeyboardMarkup()
     btns = [types.InlineKeyboardButton(str(i), callback_data=f"v:{i}:{post_id}") for i in range(1, 6)]
     kb.row(*btns)
+    kb.add(types.InlineKeyboardButton("ОТКЛОНИТЬ", callback_data=f"reject:{post_id}"))
 
     admin_msg = bot.send_message(
         FEEDBACK_CHAT_ID,
-        f"<b>От @{message.from_user.username}:</b>\n\n{message.html_text}",
+        f"<b>ОТ @{message.from_user.username}:</b>\n\n{message.html_text}",
         reply_markup=kb
     )
     db.update_post_admin_msg(post_id, admin_msg.message_id)
+
     if message.chat.id != FEEDBACK_CHAT_ID:
         bot.reply_to(message, "Пост отправлен модераторам")
 
 
+# --- Коллбэки (Кнопки) ---
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith('v:'))
 def handle_vote_callback(call):
     _, score, post_id = call.data.split(':')
-    db.add_vote(post_id, call.from_user.id, call.from_user.username, int(score))
-
-    refresh_admin_message(bot, db, post_id, call.message.chat.id, call.message.id)
-    bot.answer_callback_query(call.id, "Голос принят")
-
-
-@bot.message_handler(commands=['publish'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
-def publish_now_cmd(message):
-    post = db.get_post_by_admin_msg(message.reply_to_message.id)
-    if not post: return
-
-    publish_post(bot, db, post)
+    # Единая логика действия
+    apply_action(bot, db, post_id, 'vote', call.from_user.id, call.from_user.username, score)
+    bot.answer_callback_query(call.id, f"Голос {score} принят")
 
 
-POST_INTERVAL_SECONDS = 2 * 60 * 60
+@bot.callback_query_handler(func=lambda call: call.data.startswith('reject:'))
+def handle_reject_callback(call):
+    post_id = call.data.split(':')[1]
+    apply_action(bot, db, post_id, 'reject')
+    bot.answer_callback_query(call.id, "Отклонено")
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('schedule:'))
-def schedule_post(call):
+def handle_schedule_callback(call):
+    # Эта кнопка может появиться динамически
     post_id = call.data.split(':')[1]
-
-    db.update_post_status(post_id, 'scheduled')
-
-    update_queue(bot, db)
-
-    bot.answer_callback_query(call.id, "Пост в очереди")
+    apply_action(bot, db, post_id, 'schedule')
+    bot.answer_callback_query(call.id, "В очереди")
 
 
-@bot.message_handler(commands=['ask'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
-def ask_author(message):
-    try:
-        post = db.get_post_by_admin_msg(message.reply_to_message.id)
-        if not post: return
+# --- Команды модераторов (Reply-команды) ---
 
-        text_to_user = message.text.replace('/ask', '', 1).strip()
-        if not text_to_user: return
-
-        user_id, original_msg_id = map(int, post.id.split('-'))
-
-        sent_msg = bot.send_message(
-            chat_id=user_id,
-            text=f"{text_to_user}\n\n<i>(Ответьте на это сообщение)</i>",
-            reply_to_message_id=original_msg_id,
-            parse_mode='HTML'
-        )
-
-        db.add_dialogue(sent_msg.message_id, message.message_id, post.id)
-
-        bot.set_message_reaction(message.chat.id, message.id, [ReactionTypeEmoji('👍')])
-
-
-    except Exception as e:
-        handle_exception(e, bot, message)
-
-
-@bot.message_handler(commands=['vote'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
-@bot.edited_message_handler(commands=['vote'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
-def vote_cmd(message):
+@bot.message_handler(commands=['publish'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
+def publish_now_cmd(message: Message):
     post = db.get_post_by_admin_msg(message.reply_to_message.id)
-    if not post: return
+    if post:
+        apply_action(bot, db, post.id, 'publish_now')
+    bot.delete_message(message.chat.id, message.id)
 
-    try:
-        score = int(message.text.replace('/vote', '').strip())
-        if not (1 <= score <= 5): raise ValueError
-    except:
-        bot.reply_to(message, "Введите число от 1 до 5")
-        return
 
-    db.add_vote(post.id, message.from_user.id, message.from_user.username, score)
-    refresh_admin_message(bot, db, post.id, message.chat.id, message.reply_to_message.id)
+@bot.message_handler(commands=['schedule'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
+def schedule_cmd(message: Message):
+    post = db.get_post_by_admin_msg(message.reply_to_message.id)
+    if post:
+        apply_action(bot, db, post.id, 'schedule')
     bot.delete_message(message.chat.id, message.id)
 
 
 @bot.message_handler(commands=['reject'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
-def reject_cmd(message):
+def reject_cmd(message: Message):
     post = db.get_post_by_admin_msg(message.reply_to_message.id)
-    if not post: return
-
-    db.update_post_status(post.id, 'rejected')
-
-    update_queue(bot, db)
-
-    refresh_admin_message(bot, db, post.id, message.chat.id, message.reply_to_message.id)
+    if post:
+        apply_action(bot, db, post.id, 'reject')
     bot.delete_message(message.chat.id, message.id)
 
 
-@bot.edited_message_handler(commands=['edit'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
+@bot.message_handler(commands=['vote'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
+@bot.edited_message_handler(commands=['vote'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
+def vote_cmd(message: Message):
+    post = db.get_post_by_admin_msg(message.reply_to_message.id)
+    if not post: return
+    try:
+        score = int(message.text.replace('/vote', '').strip())
+        if not (1 <= score <= 5): raise ValueError
+        apply_action(bot, db, post.id, 'vote', message.from_user.id, message.from_user.username, score)
+        bot.delete_message(message.chat.id, message.id)
+    except:
+        bot.reply_to(message, "Введи число от 1 до 5")
+
+
 @bot.message_handler(commands=['edit'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
-def edit_post_cmd(message):
+@bot.edited_message_handler(commands=['edit'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
+def edit_post_cmd(message: Message):
     post = db.get_post_by_admin_msg(message.reply_to_message.id)
     if not post: return
-
     new_content = message.html_text.replace('/edit', '', 1).strip()
-    if not new_content: return
-
-    db.update_post_text(post.id, new_content)
-
-    refresh_admin_message(bot, db, post.id, message.chat.id, message.reply_to_message.id)
+    if new_content:
+        apply_action(bot, db, post.id, 'edit', extra_val=new_content)
     bot.delete_message(message.chat.id, message.id)
 
+
+@bot.message_handler(commands=['ask'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
+def ask_author_cmd(message: Message):
+    try:
+        post = db.get_post_by_admin_msg(message.reply_to_message.id)
+        if not post: return
+        text = message.text.replace('/ask', '', 1).strip()
+        if not text: return
+
+        user_id, original_msg_id = map(int, post.id.split('-'))
+        sent = bot.send_message(
+            user_id,
+            f"{text}\n\n<i>(Ответьте на это)</i>",
+            reply_to_message_id=original_msg_id,
+            parse_mode='HTML'
+        )
+        db.add_dialogue(sent.message_id, message.message_id, post.id)
+        bot.set_message_reaction(message.chat.id, message.id, [ReactionTypeEmoji('👍')])
+    except Exception as e:
+        handle_exception(e, bot, message)
+
+
+# --- Управляющие команды админов ---
 
 @bot.message_handler(commands=['use'])
-def queue_cmd(message: Message):
-    if message.reply_to_message is None:
-        return
-
-    if not is_admin(message.from_user.id):
-        return
-
-    new_proposal(message.reply_to_message)
-    bot.delete_message(message.chat.id, message.id)
+def use_cmd(message: Message):
+    if message.reply_to_message and is_admin(message.from_user.id):
+        new_proposal(message.reply_to_message)
+        bot.delete_message(message.chat.id, message.id)
 
 
 @bot.message_handler(commands=['block'])
 def block_cmd(message: Message):
-    if message.reply_to_message is None:
-        return
-
-    post = db.get_post_by_admin_msg(message.reply_to_message.id)
-    if not post: return
-
-    db.block_user(post.user_id)
-    bot.delete_message(message.chat.id, message.id)
-    bot.send_message(message.chat.id, f"Пользователь {post.user_id} заблокирован")
+    if message.reply_to_message:
+        post = db.get_post_by_admin_msg(message.reply_to_message.id)
+        if post and is_admin(message.from_user.id):
+            apply_action(bot, db, post.id, 'block')
+            bot.delete_message(message.chat.id, message.id)
+            bot.send_message(message.chat.id, f"Пользователь {post.user_id} заблокирован")
 
 
 @bot.message_handler(commands=["queue"])
-def queue_cmd(message: Message):
-    if not is_admin(message.from_user.id):
-        return
+def force_queue_cmd(message: Message):
+    if is_admin(message.from_user.id):
+        update_queue(bot, db)
+        bot.delete_message(message.chat.id, message.id)
+        bot.send_message(message.chat.id, "Очередь обновлена")
 
-    update_queue(bot, db)
-    bot.delete_message(message.chat.id, message.id)
-    bot.send_message(message.chat.id, "Очередь обновлена")
 
+# --- Запуск ---
 
 if __name__ == '__main__':
-    logger.info("Starting bot...")
+    logger.info("Bot is starting (Polling)...")
     bot.infinity_polling()
