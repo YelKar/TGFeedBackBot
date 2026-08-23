@@ -1,6 +1,8 @@
 import json
 import os
+
 import ydb
+
 from logger import logger
 
 _driver = None
@@ -9,44 +11,14 @@ _pool = None
 
 def create_connection():
     global _driver, _pool
-
-    # Если драйвер есть, но он перестал отвечать (флаг устанавливается в _execute)
-    if _driver is not None:
-        try:
-            # Быстрая проверка связи (за 1 секунду)
-            _driver.wait(timeout=1)
-        except:
-            logger.error("YDB Driver is stale, recreating...")
-            _driver.stop()
-            _driver = None
-            _pool = None
-
     if _driver is None:
-        logger.info("Connecting to YDB (New Driver Instance)...")
+        logger.info("Connecting to YDB...")
         endpoint = os.getenv("YDB_ENDPOINT")
         database = os.getenv("YDB_DATABASE")
         creds = ydb.credentials_from_env_variables()
-
-        # Стандартный конфиг без лишних аргументов
-        driver_config = ydb.DriverConfig(
-            endpoint,
-            database,
-            credentials=creds
-        )
-
-        _driver = ydb.Driver(driver_config)
-
-        try:
-            # Ждем подключения не более 5 секунд
-            _driver.wait(timeout=5)
-            # Создаем пул сессий
-            _pool = ydb.SessionPool(_driver, size=10)
-            logger.info("YDB Connected successfully")
-        except Exception as e:
-            _driver = None
-            logger.error(f"YDB Connection failed: {e}")
-            raise
-
+        _driver = ydb.Driver(ydb.DriverConfig(endpoint, database, credentials=creds))
+        _driver.wait(timeout=5)
+        _pool = ydb.SessionPool(_driver, size=10)
     return _pool
 
 
@@ -65,9 +37,7 @@ class Database:
 
     def _execute(self, query, params=None):
         def callee(session):
-            # КЛЮЧЕВАЯ ОПТИМИЗАЦИЯ: Таймауты на уровне запроса
-            # .with_timeout(5) - общее время ожидания (gRPC Deadline)
-            # .with_operation_timeout(4) - таймаут на стороне сервера YDB
+
             settings = ydb.BaseRequestSettings() \
                 .with_timeout(5) \
                 .with_operation_timeout(4)
@@ -83,16 +53,10 @@ class Database:
         try:
             return self.pool.retry_operation_sync(callee)
         except Exception as e:
-            # Если поймали любую сетевую ошибку (Unavailable, Aborted, TransportError)
-            # Сбрасываем глобальный драйвер, чтобы следующий вызов функции пересоздал его
             error_str = str(e).lower()
             if any(x in error_str for x in ["transport", "unavailable", "deadline", "expired"]):
-                global _driver
-                _driver = None
                 logger.error(f"YDB Critical Error: {e}. Driver has been reset.")
             raise
-
-    # ... все остальные методы (get_filtered_posts, create_post и т.д.) без изменений
 
     def get_filtered_posts(self, user_id=None, status=None, limit=10, last_ts=None):
         """
@@ -103,7 +67,6 @@ class Database:
         limit = int(limit)
         params = {"$limit": limit}
 
-        # Базовая часть запроса
         where_clauses = []
         if user_id:
             where_clauses.append("user_id = $uid")
@@ -117,7 +80,6 @@ class Database:
 
         where_str = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
 
-        # Обязательно объявляем DECLARE для всех используемых параметров
         declares = ["DECLARE $limit AS Uint32;"]
         if user_id: declares.append("DECLARE $uid AS Int64;")
         if status: declares.append("DECLARE $s AS Utf8;")
@@ -153,6 +115,20 @@ class Database:
         res = self._execute(query, {"$pid": post_id})
         return res[0].rows
 
+    def get_votes_for_posts(self, post_ids):
+        """Получает все голоса для списка постов одним запросом."""
+        if not post_ids:
+            return []
+
+        query = f"""
+        DECLARE $ids AS List<Utf8>;
+        SELECT post_id, admin_username, vote 
+        FROM {self.t_vote} 
+        WHERE post_id IN $ids;
+        """
+        res = self._execute(query, {"$ids": post_ids})
+        return res[0].rows
+
     def is_blocked(self, user_id):
         query = f"DECLARE $id AS Int64; SELECT id FROM {self.t_blocked} WHERE id = $id;"
         res = self._execute(query, {"$id": user_id})
@@ -168,7 +144,13 @@ class Database:
         return res[0].rows[0].publish_at if res[0].rows else None
 
     def get_scheduled_queue(self):
-        query = f"SELECT id, admin_msg_id, created_at, publish_at FROM {self.t_post} WHERE status = 'scheduled' ORDER BY created_at ASC;"
+        """Возвращает данные для визуализации очереди."""
+        query = f"""
+        SELECT id, username, text, publish_at, created_at, admin_msg_id, sequence_number
+        FROM {self.t_post} 
+        WHERE status = 'scheduled' 
+        ORDER BY publish_at ASC;
+        """
         res = self._execute(query)
         return res[0].rows
 
@@ -183,7 +165,15 @@ class Database:
         return json.loads(res[0].rows[0].value) if res[0].rows else None
 
     def get_post(self, post_id):
-        query = f"DECLARE $id AS Utf8; SELECT * FROM {self.t_post} WHERE id = $id;"
+        query = f"""
+        DECLARE $id AS Utf8;
+
+        SELECT
+            *
+        FROM {self.t_post}
+        WHERE id = $id;
+        """
+
         res = self._execute(query, {"$id": post_id})
         return res[0].rows[0] if res[0].rows else None
 
@@ -204,3 +194,28 @@ class Database:
         query = f"DECLARE $u AS Int64; SELECT admin_msg_id, post_id FROM {self.t_dialogue} WHERE user_msg_id = $u;"
         res = self._execute(query, {"$u": u_msg_id})
         return res[0].rows[0] if res[0].rows else None
+
+    def update_posts_batch(self, updates):
+        """
+        Массовое обновление времени публикации.
+        """
+        if not updates:
+            return
+
+        query = f"""
+        DECLARE $items AS List<Struct<id: Utf8, publish_at: Timestamp>>;
+
+        UPSERT INTO {self.t_post} (id, publish_at, status)
+        SELECT 
+            id, 
+            publish_at, 
+            Utf8("scheduled") AS status
+        FROM AS_TABLE($items);
+        """
+
+        try:
+            self._execute(query, {"$items": updates})
+            logger.info(f"Batch upsert successful for {len(updates)} posts")
+        except Exception as e:
+            logger.error(f"Batch upsert failed: {e}")
+            raise

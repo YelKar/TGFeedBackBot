@@ -1,10 +1,14 @@
-import base64, json, os, time
+import base64
+import json
+import os
+
 import telebot
+
 from bot import bot, db
 from bot_util import apply_action, get_post_analytics, FEEDBACK_CHAT_ID, publish_post, verify_tg_data, \
-    get_user_from_data
-from scheduler import get_now
+    get_user_from_data, get_admin_count, calculate_analytics
 from logger import logger
+from scheduler import get_now
 
 
 def handle_api(event, db, bot):
@@ -40,18 +44,40 @@ def handle_api(event, db, bot):
         else:
             posts = db.get_filtered_posts(status=params.get('status', 'pending'), limit=limit, last_ts=last_ts)
 
+        if not posts:
+            return {'statusCode': 200, 'headers': cors_headers,
+                    'body': json.dumps({'posts': [], 'role': 'admin' if is_admin else 'user'})}
+
+        post_ids = [p.id for p in posts]
+
+        all_votes = db.get_votes_for_posts(post_ids)
+
+        votes_by_post = {}
+        for v in all_votes:
+            if v.post_id not in votes_by_post:
+                votes_by_post[v.post_id] = []
+            votes_by_post[v.post_id].append(v)
+
+        total_admins = get_admin_count(bot)
         full_data = []
+
         for p in posts:
-            ana = get_post_analytics(bot, db, p.id)
+            post_votes = votes_by_post.get(p.id, [])
+
+            ana = calculate_analytics(post_votes, total_admins)
+
             full_data.append({
-                "id": p.id, "username": p.username, "text": p.text, "status": p.status,
+                "id": p.id,
+                "username": p.username,
+                "text": p.text,
+                "status": p.status,
                 "publish_at": p.publish_at / 1000000 if p.publish_at else None,
                 "created_at": p.created_at / 1000000,
                 "analytics": ana
             })
+
         return {'statusCode': 200, 'headers': cors_headers,
                 'body': json.dumps({'posts': full_data, 'role': 'admin' if is_admin else 'user'}, default=str)}
-
     if method == 'get_single_post':
         p = db.get_post(params.get('post_id'))
         if not p: return {'statusCode': 404, 'headers': cors_headers}

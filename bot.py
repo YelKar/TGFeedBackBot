@@ -1,10 +1,12 @@
 import os
+from datetime import datetime
+
 import telebot
 from telebot import types
 from telebot.types import ReactionTypeEmoji, Message
-telebot.apihelper.proxy = {'https': 'socks5h://127.0.0.1:12334'}
 
-# Загрузка переменных окружения для локального запуска
+from scheduler import rebalance_queue
+
 if __name__ == '__main__':
     import dotenv
 
@@ -13,27 +15,21 @@ if __name__ == '__main__':
 from db import Database
 from logger import logger
 from bot_util import (
-    refresh_admin_message,
     FEEDBACK_CHAT_ID,
-    update_queue,
     handle_exception,
     apply_action
 )
 
-# Настройка прокси (для локальной разработки)
 # proxy_url = 'socks5h://127.0.0.1:12334'  # Используем socks5h для DNS через прокси
 # telebot.apihelper.proxy = {'https': proxy_url}
 
 TOKEN = os.getenv('TOKEN')
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
 
-# Удаляем вебхук только при локальном запуске
 if __name__ == '__main__':
     bot.delete_webhook()
 
 db = Database()
-
-# --- Константы текстов ---
 
 USER_HELP = """
 <b><u>СПРАВКА</u></b>
@@ -67,11 +63,10 @@ MODERATOR_HELP = """
 /use — Сделать предложку из любого сообщения.
 
 <b>ОЧЕРЕДЬ</b>
-/queue — Пересчитать расписание и обновить сообщения.
+/queue — вывести всю очередь.
+/reschedule — Пересчитать расписание и обновить сообщения.
 """
 
-
-# --- Хелперы ---
 
 def is_admin(user_id):
     try:
@@ -80,8 +75,6 @@ def is_admin(user_id):
     except:
         return False
 
-
-# --- Базовые хендлеры ---
 
 @bot.message_handler(commands=['help'])
 def help_cmd(message: Message):
@@ -97,14 +90,11 @@ def start_cmd(message: Message):
     help_cmd(message)
 
 
-# --- Прием сообщений от пользователей ---
-
 @bot.message_handler(func=lambda m: m.chat.id != FEEDBACK_CHAT_ID, content_types=['text'])
 def handle_user_message(message: Message):
     if db.is_blocked(message.from_user.id):
         return
 
-    # Если это ответ на вопрос бота (диалог)
     if message.reply_to_message and message.reply_to_message.from_user.id == bot.get_me().id:
         dialogue = db.get_dialogue(message.reply_to_message.id)
         if dialogue:
@@ -119,7 +109,6 @@ def handle_user_message(message: Message):
             bot.reply_to(message, "ПЕРЕДАНО")
             return
 
-    # Иначе создаем новый пост
     new_proposal(message)
 
 
@@ -130,7 +119,6 @@ def new_proposal(message: Message):
     post_id = f"{message.chat.id}-{message.message_id}"
     db.create_post(post_id, message.from_user.id, message.from_user.username, message.html_text)
 
-    # Создаем клавиатуру (всегда с 1-5 и Отклонить в начале)
     kb = types.InlineKeyboardMarkup()
     btns = [types.InlineKeyboardButton(str(i), callback_data=f"v:{i}:{post_id}") for i in range(1, 6)]
     kb.row(*btns)
@@ -138,7 +126,7 @@ def new_proposal(message: Message):
 
     admin_msg = bot.send_message(
         FEEDBACK_CHAT_ID,
-        f"<b>ОТ @{message.from_user.username}:</b>\n\n{message.html_text}",
+        f"<b>От @{message.from_user.username}:</b>\n\n{message.html_text}",
         reply_markup=kb
     )
     db.update_post_admin_msg(post_id, admin_msg.message_id)
@@ -147,12 +135,10 @@ def new_proposal(message: Message):
         bot.reply_to(message, "Пост отправлен модераторам")
 
 
-# --- Коллбэки (Кнопки) ---
-
 @bot.callback_query_handler(func=lambda call: call.data.startswith('v:'))
 def handle_vote_callback(call):
     _, score, post_id = call.data.split(':')
-    # Единая логика действия
+
     apply_action(bot, db, post_id, 'vote', call.from_user.id, call.from_user.username, score)
     bot.answer_callback_query(call.id, f"Голос {score} принят")
 
@@ -166,13 +152,10 @@ def handle_reject_callback(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('schedule:'))
 def handle_schedule_callback(call):
-    # Эта кнопка может появиться динамически
     post_id = call.data.split(':')[1]
     apply_action(bot, db, post_id, 'schedule')
     bot.answer_callback_query(call.id, "В очереди")
 
-
-# --- Команды модераторов (Reply-команды) ---
 
 @bot.message_handler(commands=['publish'], func=lambda m: m.chat.id == FEEDBACK_CHAT_ID and m.reply_to_message)
 def publish_now_cmd(message: Message):
@@ -244,8 +227,6 @@ def ask_author_cmd(message: Message):
         handle_exception(e, bot, message)
 
 
-# --- Управляющие команды админов ---
-
 @bot.message_handler(commands=['use'])
 def use_cmd(message: Message):
     if message.reply_to_message and is_admin(message.from_user.id):
@@ -264,14 +245,48 @@ def block_cmd(message: Message):
 
 
 @bot.message_handler(commands=["queue"])
+def queue_cmd(message: Message):
+    if not is_admin(message.from_user.id): return
+
+    queue = db.get_scheduled_queue()
+    if not queue:
+        return bot.send_message(message.chat.id, "📭 <b>Очередь пуста</b>")
+
+    clean_chat_id = str(FEEDBACK_CHAT_ID).replace("-100", "")
+
+    lines = [f"<b>📊 Очередь публикаций ({len(queue)})</b>"]
+    current_day = None
+
+    from scheduler import TZ_OFFSET
+
+    for p in queue:
+        dt = datetime.fromtimestamp(p.publish_at / 1000000, tz=TZ_OFFSET)
+        day_str = dt.strftime("%d.%m %a")
+        time_str = dt.strftime("%H:%M")
+
+        if day_str != current_day:
+            lines.append(f"\n📅 <b>{day_str}</b>")
+            current_day = day_str
+
+        if p.get('admin_msg_id'):
+            link = f"https://t.me/c/{clean_chat_id}/{p.admin_msg_id}"
+            link_html = f"<a href='{link}'>🔗</a>"
+        else:
+            link_html = "🔘"
+
+        lines.append(f"<b>[{p.sequence_number}]</b> <code>{time_str}</code> {link_html} @{p.username}")
+
+    bot.send_message(message.chat.id, "\n".join(lines), parse_mode='HTML',
+                     disable_web_page_preview=True)
+
+
+@bot.message_handler(commands=["reschedule"])
 def force_queue_cmd(message: Message):
-    if is_admin(message.from_user.id):
-        update_queue(bot, db)
+    if is_admin(message.from_user.id) or True:
+        rebalance_queue(db)
         bot.delete_message(message.chat.id, message.id)
         bot.send_message(message.chat.id, "Очередь обновлена")
 
-
-# --- Запуск ---
 
 if __name__ == '__main__':
     logger.info("Bot is starting (Polling)...")

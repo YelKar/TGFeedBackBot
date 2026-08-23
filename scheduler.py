@@ -33,42 +33,56 @@ def calculate_next_time(after_time, config):
 
 
 def rebalance_queue(db):
+    logger.info("Rebalance queue")
     config = db.get_config("scheduler")
-    logger.info(f"Config: {config}")
-    if not config: return
+    if not config:
+        logger.info("Not config")
+        return
 
+    logger.info("Config ok")
     now = get_now()
-
     last_publish_us = db.get_latest_published_time()
-
     day_stats = {}
 
     if last_publish_us:
         last_dt = datetime.datetime.fromtimestamp(last_publish_us / 1000000, tz=TZ_OFFSET)
         current_point = max(now, last_dt)
-
         if last_dt.date() == now.date():
             day_stats[now.date()] = 1
     else:
         current_point = now
 
-    scheduled_posts = db.get_scheduled_queue()
-    logger.info(f"Scheduled posts: {len(scheduled_posts)}")
+    logger.info("Get posts")
+
+    scheduled_posts = sorted(
+        db.get_scheduled_queue(),
+        key=lambda post: print(post.created_at, type(post.created_at)) or post.created_at
+    )
+    print(scheduled_posts)
+
+    updates = []
+    logger.info("Start scheduling")
 
     for post in scheduled_posts:
-        logger.info(f"Processing post {post.id}")
         while True:
             next_time = calculate_next_time(current_point, config)
             post_date = next_time.date()
-
             current_day_count = day_stats.get(post_date, 0)
 
             if current_day_count < config['posts_per_day']:
+                ts = int(next_time.timestamp() * 1000000)
+
+                updates.append({
+                    "id": post.id,
+                    "publish_at": ts
+                })
 
                 day_stats[post_date] = current_day_count + 1
-                db.update_post_status(post.id, 'scheduled', int(next_time.timestamp() * 1000000))
                 current_point = next_time
                 break
             else:
-
                 current_point = next_time.replace(hour=23, minute=59, second=59)
+
+    if updates:
+        db.update_posts_batch(updates)
+        logger.info(f"Batch updated {len(updates)} posts in queue.")
