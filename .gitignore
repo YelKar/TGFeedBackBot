@@ -1,4 +1,16 @@
-**/.env
-**/.idea/
-**/__pycache__/
-sa_key.json
+# Секреты
+.env
+.dev.vars
+
+# Зависимости и сборка
+node_modules/
+dist/
+
+# Wrangler
+.wrangler/
+
+# IDE / система
+.idea/
+__pycache__/
+*.swp
+.DS_Store

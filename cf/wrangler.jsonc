@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "come-up-with-a-name-bot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+
+  // База данных: создайте через `npx wrangler d1 create tgfeedback`
+  // и подставьте полученный database_id
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tgfeedback",
+      "database_id": "75c6aa6b-0de5-4035-977c-74cc995810ba"
+    }
+  ],
+
+  // Публикация по расписанию: проверка каждую минуту,
+  // ежечасная сверка pending-статусов внутри scheduled-хендлера
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+
+  // Веб-интерфейс модерации (React+TS, собирается в ui/dist)
+  "assets": {
+    "directory": "./ui/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+
+  // Переменные окружения
+  // Секреты задаются отдельно: npx wrangler secret put TOKEN / CHANNEL_ID / WEBHOOK_SECRET
+  "vars": {
+    "CHAT_ID": "-1001522287326"
+  }
+}

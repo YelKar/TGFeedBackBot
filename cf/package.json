@@ -1,0 +1,25 @@
+{
+  "name": "tgfeedbackbot-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "tsc --noEmit",
+    "verify": "npm run check && npm run test",
+    "db:local": "wrangler d1 execute tgfeedback --local --file=migrations/0001_init.sql",
+    "db:remote": "wrangler d1 execute tgfeedback --remote --file=migrations/0001_init.sql"
+  },
+  "dependencies": {
+    "grammy": "^1.35.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5",
+    "@grammyjs/types": "^4",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
+    "wrangler": "^4.0.0"
+  }
+}
