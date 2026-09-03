@@ -51,7 +51,12 @@ export function PostCard({ post, onAction, isUserView }: PostCardProps): ReactNo
         <div className="bg-[var(--tg-bg)] p-5 rounded-3xl shadow-sm border border-[var(--tg-hint)]/20 flex flex-col justify-between transition-all">
             <div>
                 <div className="flex justify-between items-start mb-3">
-                    <span className="text-[10px] font-black text-[var(--tg-button)] uppercase tracking-widest">@{post.username || 'user'}</span>
+                    <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-black text-[var(--tg-button)] uppercase tracking-widest">@{post.username || 'user'}</span>
+                        {post.media_count > 0 && (
+                            <span className="text-[10px] text-[var(--tg-hint)]">📷 {post.media_count}</span>
+                        )}
+                    </div>
                     {!isUserView && <EllipsisMenu post={post} onAction={onAction} />}
                 </div>
 

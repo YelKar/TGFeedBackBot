@@ -4,4 +4,5 @@ export interface Env {
     CHANNEL_ID: string // ID канала публикации
     WEBHOOK_SECRET?: string
     DB: D1Database
+    MODERATION: DurableObjectNamespace
 }

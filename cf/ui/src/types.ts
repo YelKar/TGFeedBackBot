@@ -24,6 +24,7 @@ export interface Post {
     status: PostStatus
     publish_at: number | null // секунды
     created_at: number // секунды
+    media_count: number
     analytics: Analytics
 }
 

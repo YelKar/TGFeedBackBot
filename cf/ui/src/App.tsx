@@ -4,17 +4,21 @@ import { EditModal, PostCard } from './components'
 import { fetchPosts, fetchSinglePost, sendAction } from './api'
 import type { ActionId, AdminTab, Post, Role, UserTab } from './types'
 
+const PAGE_SIZE = 20
+
 function App(): ReactNode {
     const [allPosts, setAllPosts] = useState<Post[]>([])
     const [role, setRole] = useState<Role>('loading')
     const [tab, setTab] = useState<AdminTab>('pending')
     const [userTab, setUserTab] = useState<UserTab>('active')
     const [loading, setLoading] = useState(false)
-    const [loadedTabs, setLoadedTabs] = useState<Set<string>>(new Set())
+    const [cursor, setCursor] = useState<number | null>(null)
+    const [exhausted, setExhausted] = useState(false)
     const [editingPost, setEditingPost] = useState<Post | null>(null)
 
     const tg = window.Telegram?.WebApp
 
+    // Интеграция темы Telegram
     useEffect(() => {
         if (!tg) return
         tg.ready()
@@ -35,24 +39,39 @@ function App(): ReactNode {
         }
     }
 
-    async function load(isRefresh = false): Promise<void> {
-        const isUserMode = role === 'user' || tab === 'user_view'
-        const currentModeKey = isUserMode ? `user_${userTab}` : tab
-        if (loadedTabs.has(currentModeKey) && !isRefresh) return
+    function isUserMode(): boolean {
+        return role === 'user' || tab === 'user_view'
+    }
+
+    /**
+     * fresh=true — первая страница вкладки (курсор сбрасывается),
+     * fresh=false — догрузка следующей страницы по курсору.
+     */
+    async function load(fresh: boolean): Promise<void> {
+        if (loading || role === 'loading' || role === 'unauthorized') return
+        if (!fresh && (exhausted || cursor === null)) return
 
         setLoading(true)
         try {
-            const method = isUserMode ? 'get_my_posts' : 'get_posts'
-            const { posts: incoming, role: newRole } = await fetchPosts(method, isUserMode ? undefined : tab)
+            const mode = isUserMode()
+            const method = mode ? 'get_my_posts' : 'get_posts'
+            const { posts: incoming, role: newRole } = await fetchPosts(
+                method,
+                mode ? undefined : tab,
+                fresh ? null : cursor
+            )
 
             setAllPosts((prev) => {
-                const incomingIds = new Set(incoming.map((p) => p.id))
-                const filteredPrev = prev.filter((p) => !incomingIds.has(p.id))
-                return [...filteredPrev, ...incoming]
+                const ids = new Set(incoming.map((p) => p.id))
+                return fresh ? [...prev.filter((p) => !ids.has(p.id)), ...incoming] : [...prev.filter((p) => !ids.has(p.id)), ...incoming]
             })
 
             setRole(newRole)
-            if (!isRefresh) setLoadedTabs((prev) => new Set(prev).add(currentModeKey))
+            if (incoming.length < PAGE_SIZE) setExhausted(true)
+            if (incoming.length > 0) {
+                const oldest = Math.min(...incoming.map((p) => p.created_at))
+                setCursor((prevCursor) => (fresh ? oldest : Math.min(prevCursor ?? Infinity, oldest)))
+            }
         } catch (e) {
             if (e instanceof Error && e.message === 'unauthorized') setRole('unauthorized')
             else console.error(e)
@@ -61,8 +80,20 @@ function App(): ReactNode {
     }
 
     useEffect(() => {
-        void load()
+        setExhausted(false)
+        setCursor(null)
+        void load(true)
     }, [tab, userTab, role])
+
+    useEffect(() => {
+        const onScroll = (): void => {
+            if (loading || exhausted) return
+            const nearBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 800
+            if (nearBottom) void load(false)
+        }
+        window.addEventListener('scroll', onScroll)
+        return () => window.removeEventListener('scroll', onScroll)
+    })
 
     async function handleAction(
         postId: string,
@@ -75,11 +106,8 @@ function App(): ReactNode {
         }
 
         const ok = await sendAction(postId, action, extra)
-        if (ok) {
-            await syncPost(postId)
-        } else {
-            alert('ОШИБКА БЭКЕНДА')
-        }
+        if (ok) await syncPost(postId)
+        else alert('ОШИБКА БЭКЕНДА')
     }
 
     const displayPosts = useMemo(() => {
@@ -112,44 +140,7 @@ function App(): ReactNode {
     )
 
     const adminTabs: AdminTab[] = ['pending', 'scheduled', 'published', 'rejected', 'user_view']
-    const adminTabBar =
-        role === 'admin' ? (
-            <div className="flex gap-1 mb-8 bg-[var(--tg-secondary-bg)] p-1 rounded-2xl overflow-x-auto no-scrollbar shadow-inner">
-                {adminTabs.map((s) => (
-                    <button
-                        key={s}
-                        onClick={() => setTab(s)}
-                        className={`flex-1 min-w-[85px] py-2 text-[9px] font-black uppercase rounded-xl transition-all ${
-                            tab === s ? 'bg-[var(--tg-bg)] shadow-sm text-[var(--tg-button)]' : 'text-[var(--tg-hint)]'
-                        }`}
-                    >
-                        {s === 'pending' ? 'Новые' : s === 'scheduled' ? 'Очередь' : s === 'published' ? 'Архив' : s === 'rejected' ? 'Отказ' : 'Как юзер'}
-                    </button>
-                ))}
-            </div>
-        ) : null
-
     const showUserTabs = role === 'user' || tab === 'user_view'
-    const userTabBar = showUserTabs ? (
-        <div className="flex gap-1 mb-6 bg-[var(--tg-secondary-bg)] p-1 rounded-2xl max-w-md mx-auto shadow-inner border border-[var(--tg-hint)]/5">
-            <button
-                onClick={() => setUserTab('active')}
-                className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${
-                    userTab === 'active' ? 'bg-[var(--tg-bg)] shadow-sm text-[var(--tg-button)]' : 'text-[var(--tg-hint)]'
-                }`}
-            >
-                Активные
-            </button>
-            <button
-                onClick={() => setUserTab('published')}
-                className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${
-                    userTab === 'published' ? 'bg-[var(--tg-bg)] shadow-sm text-[var(--tg-button)]' : 'text-[var(--tg-hint)]'
-                }`}
-            >
-                Архив
-            </button>
-        </div>
-    ) : null
 
     return (
         <div className="max-w-5xl mx-auto p-4 pb-24 min-h-screen bg-[var(--tg-bg)] font-sans">
@@ -160,8 +151,42 @@ function App(): ReactNode {
                 {refreshButton}
             </header>
 
-            {adminTabBar}
-            {userTabBar}
+            {role === 'admin' && (
+                <div className="flex gap-1 mb-8 bg-[var(--tg-secondary-bg)] p-1 rounded-2xl overflow-x-auto no-scrollbar shadow-inner">
+                    {adminTabs.map((s) => (
+                        <button
+                            key={s}
+                            onClick={() => setTab(s)}
+                            className={`flex-1 min-w-[85px] py-2 text-[9px] font-black uppercase rounded-xl transition-all ${
+                                tab === s ? 'bg-[var(--tg-bg)] shadow-sm text-[var(--tg-button)]' : 'text-[var(--tg-hint)]'
+                            }`}
+                        >
+                            {s === 'pending' ? 'Новые' : s === 'scheduled' ? 'Очередь' : s === 'published' ? 'Архив' : s === 'rejected' ? 'Отказ' : 'Как юзер'}
+                        </button>
+                    ))}
+                </div>
+            )}
+
+            {showUserTabs && (
+                <div className="flex gap-1 mb-6 bg-[var(--tg-secondary-bg)] p-1 rounded-2xl max-w-md mx-auto shadow-inner border border-[var(--tg-hint)]/5">
+                    <button
+                        onClick={() => setUserTab('active')}
+                        className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${
+                            userTab === 'active' ? 'bg-[var(--tg-bg)] shadow-sm text-[var(--tg-button)]' : 'text-[var(--tg-hint)]'
+                        }`}
+                    >
+                        Активные
+                    </button>
+                    <button
+                        onClick={() => setUserTab('published')}
+                        className={`flex-1 py-2 text-[10px] font-black uppercase rounded-xl transition-all ${
+                            userTab === 'published' ? 'bg-[var(--tg-bg)] shadow-sm text-[var(--tg-button)]' : 'text-[var(--tg-hint)]'
+                        }`}
+                    >
+                        Архив
+                    </button>
+                </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                 {displayPosts.map((p) => (
@@ -172,6 +197,27 @@ function App(): ReactNode {
             {displayPosts.length === 0 && !loading && (
                 <div className="text-center py-20 bg-[var(--tg-secondary-bg)] rounded-3xl border-2 border-dashed border-[var(--tg-hint)]/10 text-[var(--tg-hint)] font-black uppercase tracking-widest text-xs opacity-50">
                     Пусто
+                </div>
+            )}
+
+            {!exhausted && displayPosts.length > 0 && (
+                <div className="flex justify-center py-6">
+                    {loading ? (
+                        <i className="fa-solid fa-circle-notch animate-spin text-[var(--tg-hint)]"></i>
+                    ) : (
+                        <button
+                            onClick={() => void load(false)}
+                            className="text-[10px] font-black uppercase tracking-widest text-[var(--tg-hint)] px-6 py-3"
+                        >
+                            Показать ещё
+                        </button>
+                    )}
+                </div>
+            )}
+
+            {exhausted && displayPosts.length > 0 && (
+                <div className="text-center pb-4 text-[9px] uppercase tracking-widest text-[var(--tg-hint)] opacity-40">
+                    Это всё
                 </div>
             )}
 

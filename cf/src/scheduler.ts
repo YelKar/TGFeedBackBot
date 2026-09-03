@@ -3,10 +3,10 @@ import type { PostRow, SchedulerConfig } from './types'
 export const TZ_OFFSET_MS = 3 * 3600_000
 
 export interface QueueDb {
-    getConfig<T>(key: string): Promise<T | null>
+    getConfig(key: 'scheduler'): Promise<SchedulerConfig | null>
     getLatestPublishedMs(): Promise<number | null>
     getScheduledQueue(): Promise<PostRow[]>
-    updatePostsBatch(updates: { id: string; publish_at: number; sequence_number: number }[]): Promise<void>
+    updatePostsBatch(updates: QueueUpdate[]): Promise<void>
 }
 
 interface LocalParts {
@@ -35,8 +35,10 @@ function makeLocal(y: number, m: number, d: number, h: number, min: number, s: n
 }
 
 export function calculateNextTime(afterMs: number, config: SchedulerConfig): number {
+    let iter = 0
     let current = afterMs
     for (;;) {
+        if (++iter > 1000) throw new Error(`calculateNextTime infinite loop afterMs=${afterMs} config=${JSON.stringify(config)}`)
         const { y, m, d } = localParts(current)
 
         const slots: number[] = []
@@ -55,7 +57,9 @@ export function calculateNextTime(afterMs: number, config: SchedulerConfig): num
         const found = slots.find((slot) => slot >= current + config.min_interval * 1000)
         if (found !== undefined) return found
 
-        current = makeLocal(y, m, d + 1, config.window_start, 0, 0) - config.min_interval * 1000
+        const nextDayStart = makeLocal(y, m, d + 1, config.window_start, 0, 0)
+        const candidate = nextDayStart - config.min_interval * 1000
+        current = dayKey(candidate) === dayKey(nextDayStart) ? candidate : nextDayStart
     }
 }
 
@@ -70,7 +74,7 @@ export interface QueueUpdate {
 }
 
 export async function rebalanceQueue(db: QueueDb, nowMs: number = Date.now()): Promise<void> {
-    const config = await db.getConfig<SchedulerConfig>('scheduler')
+    const config = await db.getConfig('scheduler')
     if (!config) return
 
     const lastPublishMs = await db.getLatestPublishedMs()

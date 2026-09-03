@@ -125,6 +125,36 @@ cloudflared tunnel --url http://localhost:8787
 # затем setWebhook на полученный trycloudflare.com URL + /webhook
 ```
 
+## Dev / Prod
+
+Окружения разделены через environments в `cf/wrangler.jsonc`:
+
+| | Dev (по умолчанию) | Production |
+|---|---|---|
+| Воркер | `come-up-with-a-name-bot` | `come-up-with-a-name-bot-prod` |
+| D1 | `tgfeedback` | `tgfeedback-prod` |
+| Деплой | `npm run deploy` | `npm run deploy:prod` |
+| Секреты | `wrangler secret put X` | `wrangler secret put X --env production` или дашборд |
+
+Первичная настройка prod:
+
+```bash
+npx wrangler d1 create tgfeedback-prod   # id → в wrangler.jsonc env.production
+npm run db:remote:prod                   # схема всех трёх миграций
+# конфиг scheduler — тот же INSERT, но на tgfeedback-prod
+npx wrangler secret put TOKEN --env production
+npx wrangler secret put CHANNEL_ID --env production
+npx wrangler secret put WEBHOOK_SECRET --env production
+# CHAT_ID в wrangler.jsonc → env.production.vars
+npm run deploy:prod
+curl "https://api.telegram.org/bot<ТОКЕН>/setWebhook" \
+  -d "url=https://come-up-with-a-name-bot-prod.<субдомен>.workers.dev/webhook" \
+  -d "secret_token=<WEBHOOK_SECRET>"
+```
+
+Рекомендуется завести отдельного тестового бота в @BotFather и указать его токен
+в dev-окружении, чтобы не дёргать живую аудиторию.
+
 ## Проверки
 
 ```bash

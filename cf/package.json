@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "deploy:prod": "wrangler deploy --env production",
+    "db:remote:prod": "wrangler d1 execute tgfeedback-prod --remote -y --file=migrations/0001_init.sql && wrangler d1 execute tgfeedback-prod --remote -y --file=migrations/0002_media.sql && wrangler d1 execute tgfeedback-prod --remote -y --file=migrations/0003_caption_above.sql",
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "tsc --noEmit",
@@ -13,7 +15,7 @@
     "db:remote": "wrangler d1 execute tgfeedback --remote --file=migrations/0001_init.sql"
   },
   "dependencies": {
-    "grammy": "^1.35.0"
+    "grammy": "^1.45.1"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5",

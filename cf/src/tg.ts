@@ -44,6 +44,9 @@ function tagFor(e: TgEntity): { open: string; close: string } | null {
             return { open: '<s>', close: '</s>' }
         case 'spoiler':
             return { open: '<tg-spoiler>', close: '</tg-spoiler>' }
+        case 'mark':
+        case 'marked':
+            return { open: '<mark>', close: '</mark>' }
         case 'code':
             return { open: '<code>', close: '</code>' }
         case 'pre':

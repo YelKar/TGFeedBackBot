@@ -53,8 +53,8 @@ class FakeDb implements QueueDb {
         private readonly lastPublishMs: number | null = null
     ) {}
 
-    async getConfig<T>(_: string): Promise<T | null> {
-        return this.config as T | null
+    async getConfig(_: 'scheduler'): Promise<SchedulerConfig | null> {
+        return this.config
     }
 
     async getLatestPublishedMs(): Promise<number | null> {
@@ -81,6 +81,7 @@ function post(id: string, createdAtMs: number): PostRow {
         admin_msg_id: null,
         publish_at: null,
         sequence_number: null,
+        media: null,
     }
 }
 

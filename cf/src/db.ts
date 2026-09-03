@@ -1,4 +1,4 @@
-import type { DialogueRow, PostRow, PostStatus, VoteRow } from './types'
+import type { ConfigMap, DialogueRow, PostRow, PostStatus, VoteRow } from './types'
 import type { QueueUpdate } from './scheduler'
 
 export interface FilteredPostsOpts {
@@ -44,15 +44,79 @@ export class Database {
         return this.all<PostRow>(sql, ...params)
     }
 
-    async createPost(postId: string, userId: number, username: string, text: string): Promise<void> {
+    async createPost(
+        postId: string,
+        userId: number,
+        username: string,
+        text: string,
+        mediaJson: string | null = null
+    ): Promise<void> {
         await this.run(
-            "INSERT INTO post (id, user_id, username, text, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
+            "INSERT INTO post (id, user_id, username, text, status, created_at, media) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
             postId,
             userId,
             username || 'unknown',
             text,
+            Date.now(),
+            mediaJson
+        )
+    }
+
+    async addMediaGroupItem(item: {
+        groupId: string
+        type: string
+        fileId: string
+        caption: string | null
+        captionAbove: boolean
+        chatId: number
+        messageId: number
+        userId: number
+        username: string
+    }): Promise<void> {
+        await this.run(
+            `INSERT INTO media_group_items (group_id, type, file_id, caption, caption_above, chat_id, message_id, user_id, username, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            item.groupId,
+            item.type,
+            item.fileId,
+            item.caption,
+            item.captionAbove ? 1 : 0,
+            item.chatId,
+            item.messageId,
+            item.userId,
+            item.username,
             Date.now()
         )
+    }
+
+    async getMediaGroupItems(groupId: string): Promise<
+        {
+            type: string
+            file_id: string
+            caption: string | null
+            caption_above: number
+            chat_id: number
+            message_id: number
+            user_id: number
+            username: string
+        }[]
+    > {
+        return this.all(
+            'SELECT type, file_id, caption, caption_above, chat_id, message_id, user_id, username FROM media_group_items WHERE group_id = ? ORDER BY seq',
+            groupId
+        )
+    }
+
+    async getMediaGroupLastAt(groupId: string): Promise<number | null> {
+        const rows = await this.all<{ t: number | null }>(
+            'SELECT MAX(created_at) AS t FROM media_group_items WHERE group_id = ?',
+            groupId
+        )
+        return rows[0]?.t ?? null
+    }
+
+    async deleteMediaGroupItems(groupId: string): Promise<void> {
+        await this.run('DELETE FROM media_group_items WHERE group_id = ?', groupId)
     }
 
     async updatePostAdminMsg(postId: string, msgId: number): Promise<void> {
@@ -154,16 +218,24 @@ export class Database {
         )
     }
 
-    async getPostsToPublish(nowMs: number): Promise<Pick<PostRow, 'id' | 'text' | 'user_id' | 'admin_msg_id'>[]> {
-        return this.all<Pick<PostRow, 'id' | 'text' | 'user_id' | 'admin_msg_id'>>(
-            "SELECT id, text, user_id, admin_msg_id FROM post WHERE status = 'scheduled' AND publish_at <= ?",
+    async getPostsToPublish(nowMs: number): Promise<Pick<PostRow, 'id' | 'text' | 'user_id' | 'admin_msg_id' | 'media'>[]> {
+        return this.all<Pick<PostRow, 'id' | 'text' | 'user_id' | 'admin_msg_id' | 'media'>>(
+            "SELECT id, text, user_id, admin_msg_id, media FROM post WHERE status = 'scheduled' AND publish_at <= ?",
             nowMs
         )
     }
 
-    async getConfig<T>(key: string): Promise<T | null> {
+    async getConfig<K extends keyof ConfigMap>(key: K): Promise<ConfigMap[K] | null> {
         const rows = await this.all<{ value: string }>('SELECT value FROM config WHERE key = ?', key)
-        return rows[0] ? (JSON.parse(rows[0].value) as T) : null
+        return rows[0] ? (JSON.parse(rows[0].value) as ConfigMap[K]) : null
+    }
+
+    async setConfig<K extends keyof ConfigMap>(key: K, value: ConfigMap[K]): Promise<void> {
+        await this.run(
+            'INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value',
+            key,
+            JSON.stringify(value)
+        )
     }
 
     async getPost(postId: string): Promise<PostRow | null> {
@@ -179,8 +251,16 @@ export class Database {
         return rows[0] ?? null
     }
 
+    async getPostsWithMissingAdminMsg(): Promise<PostRow[]> {
+        return this.all<PostRow>("SELECT * FROM post WHERE admin_msg_id IS NULL AND status IN ('pending','scheduled')")
+    }
+
     async updatePostText(postId: string, newText: string): Promise<void> {
         await this.run('UPDATE post SET text = ? WHERE id = ?', newText, postId)
+    }
+
+    async updatePostMedia(postId: string, mediaJson: string): Promise<void> {
+        await this.run('UPDATE post SET media = ? WHERE id = ?', mediaJson, postId)
     }
 
     async addDialogue(userMsgId: number, adminMsgId: number, postId: string): Promise<void> {

@@ -1,11 +1,12 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
+
+  // ─── DEV (окружение по умолчанию): текущий воркер, тестовая база ───
+  // Деплой без флага: npm run deploy
   "name": "come-up-with-a-name-bot",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-01",
 
-  // База данных: создайте через `npx wrangler d1 create tgfeedback`
-  // и подставьте полученный database_id
   "d1_databases": [
     {
       "binding": "DB",
@@ -14,22 +15,59 @@
     }
   ],
 
-  // Публикация по расписанию: проверка каждую минуту,
-  // ежечасная сверка pending-статусов внутри scheduled-хендлера
+  // Сериализация голосования через Durable Object (SQLite-backed, Free-тариф)
+  "durable_objects": {
+    "bindings": [
+      { "name": "MODERATION", "class_name": "ModerationHub" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ModerationHub"] }
+  ],
+
   "triggers": {
     "crons": ["* * * * *"]
   },
 
-  // Веб-интерфейс модерации (React+TS, собирается в ui/dist)
   "assets": {
     "directory": "./ui/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application"
   },
 
-  // Переменные окружения
-  // Секреты задаются отдельно: npx wrangler secret put TOKEN / CHANNEL_ID / WEBHOOK_SECRET
   "vars": {
     "CHAT_ID": "-1001522287326"
+  },
+
+  // ─── PRODUCTION: боевой воркер ───
+  // Деплой: npm run deploy:prod
+  // Перед первым деплоем:
+  //   1. npx wrangler d1 create tgfeedback-prod → database_id ниже
+  //   2. npm run db:remote:prod (схема + конфиг scheduler)
+  //   3. Секреты TOKEN / CHANNEL_ID / WEBHOOK_SECRET — в дашборде воркера
+  //      (Settings → Variables) или: npx wrangler secret put TOKEN --env production
+  "env": {
+    "production": {
+      "name": "come-up-with-a-name-bot-prod",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "tgfeedback-prod",
+          "database_id": "5588bc0f-dad8-40dd-a1c1-22ddd3921a42"
+        }
+      ],
+      // CHAT_ID задаётся секретом (Dashboard → Variables → Secret),
+      // чтобы деплои из CLI его не перезаписывали
+
+      // Не наследуются из топ-уровня — объявляем явно
+      "durable_objects": {
+        "bindings": [
+          { "name": "MODERATION", "class_name": "ModerationHub" }
+        ]
+      },
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ModerationHub"] }
+      ]
+    }
   }
 }

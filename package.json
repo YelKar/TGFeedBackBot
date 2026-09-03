@@ -1,0 +1,7 @@
+{
+  "name": "tgfeedbackbot",
+  "private": true,
+  "scripts": {
+    "verify:all": "npm --prefix cf run verify && npm --prefix cf/ui run verify"
+  }
+}

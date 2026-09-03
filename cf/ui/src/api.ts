@@ -66,16 +66,22 @@ export function parsePost(v: unknown): Post {
         status: status as PostStatus,
         publish_at: o.publish_at === null ? null : asNumber(o.publish_at),
         created_at: asNumber(o.created_at),
+        media_count: typeof o.media_count === 'number' && !Number.isNaN(o.media_count) ? o.media_count : 0,
         analytics: parseAnalytics(o.analytics),
     }
 }
 
 export async function fetchPosts(
     method: 'get_posts' | 'get_my_posts',
-    status?: string
+    status?: string,
+    lastTs?: number | null
 ): Promise<{ posts: Post[]; role: 'admin' | 'user' }> {
-    const statusPart = method === 'get_posts' && status ? `&status=${status}` : ''
-    const res = await fetch(`${API_BASE_URL}?method=${method}${statusPart}&limit=${LIMIT}`, {
+    const qs = [`method=${method}`]
+    if (method === 'get_posts' && status) qs.push(`status=${status}`)
+    if (lastTs) qs.push(`last_ts=${Math.trunc(lastTs)}`)
+    qs.push(`limit=${LIMIT}`)
+
+    const res = await fetch(`${API_BASE_URL}?${qs.join('&')}`, {
         headers: authHeaders(),
     })
     if (res.status === 401) throw new Error('unauthorized')

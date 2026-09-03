@@ -9,12 +9,16 @@ import {
     feedbackChatId,
     getAdminCount,
     getPostAnalytics,
+    getPublishState,
     getUserFromData,
+    postMediaCount,
     publishPost,
-    reconcilePendingStatuses,
+    resendMissingAdminMessages,
     verifyTgData,
 } from './bot_util'
 import type { PostRow } from './types'
+
+export { ModerationHub } from './moderation'
 
 const CORS: Record<string, string> = {
     'Access-Control-Allow-Origin': '*',
@@ -88,6 +92,7 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
             status: p.status,
             publish_at: p.publish_at !== null ? p.publish_at / 1000 : null,
             created_at: p.created_at / 1000,
+            media_count: postMediaCount(p.media),
             analytics: calculateAnalytics(votesByPost.get(p.id) ?? [], totalAdmins),
         }))
 
@@ -106,6 +111,7 @@ async function handleApi(req: Request, env: Env): Promise<Response> {
             status: post.status,
             publish_at: post.publish_at !== null ? post.publish_at / 1000 : null,
             created_at: post.created_at / 1000,
+            media_count: postMediaCount(post.media),
             analytics: ana,
         })
     }
@@ -136,16 +142,18 @@ async function runScheduled(env: Env): Promise<void> {
     const bot = await getBot(env)
 
     const nowMs = Date.now()
-    const due = await db.getPostsToPublish(nowMs)
-    for (const post of due) {
-        await publishPost(bot, db, { env, post })
+    const pubState = await getPublishState(db)
+
+    if (!pubState.paused) {
+        const due = await db.getPostsToPublish(nowMs)
+        for (const post of due) {
+            await publishPost(bot, db, { env, post })
+        }
+    } else {
+        console.log(`Publishing paused (${pubState.last_error}), skipping due posts`)
     }
 
-    // Ежечасная сверка pending-статусов (страховка от гонки при голосовании)
-    if (new Date(nowMs).getUTCMinutes() === 0) {
-        const fixed = await reconcilePendingStatuses(bot, db, env)
-        if (fixed > 0) console.log(`Reconciled ${fixed} pending posts`)
-    }
+    await resendMissingAdminMessages(bot, db, env).catch(() => {})
 }
 
 export default {
