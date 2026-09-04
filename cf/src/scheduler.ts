@@ -70,7 +70,6 @@ function dayKey(ms: number): number {
 export interface QueueUpdate {
     id: string
     publish_at: number
-    sequence_number: number
 }
 
 export async function rebalanceQueue(db: QueueDb, nowMs: number = Date.now()): Promise<void> {
@@ -106,13 +105,11 @@ export async function rebalanceQueue(db: QueueDb, nowMs: number = Date.now()): P
                 updates.push({
                     id: post.id,
                     publish_at: nextTime,
-                    sequence_number: updates.length + 1,
                 })
                 dayStats.set(key, count + 1)
                 currentPoint = nextTime
                 break
             }
-            // Дневной лимит исчерпан — прыгаем на конец локального дня и ищем слот заново
             const p = localParts(nextTime)
             currentPoint = makeLocal(p.y, p.m, p.d, 23, 59, 59)
         }

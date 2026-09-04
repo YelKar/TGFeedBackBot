@@ -45,7 +45,7 @@ describe('calculateNextTime', () => {
 })
 
 class FakeDb implements QueueDb {
-    updates: { id: string; publish_at: number; sequence_number: number }[] | null = null
+    updates: { id: string; publish_at: number }[] | null = null
 
     constructor(
         private readonly config: SchedulerConfig | null,
@@ -65,7 +65,7 @@ class FakeDb implements QueueDb {
         return [...this.posts]
     }
 
-    async updatePostsBatch(u: { id: string; publish_at: number; sequence_number: number }[]): Promise<void> {
+    async updatePostsBatch(u: { id: string; publish_at: number }[]): Promise<void> {
         this.updates = u
     }
 }
@@ -100,7 +100,7 @@ describe('rebalanceQueue', () => {
         await rebalanceQueue(db, now)
 
         expect(db.updates).not.toBeNull()
-        const updates = db.updates as { id: string; publish_at: number; sequence_number: number }[]
+        const updates = db.updates as { id: string; publish_at: number }[]
         expect(updates).toHaveLength(3)
 
         const days = updates.map((u) => localDay(u.publish_at))
@@ -109,7 +109,6 @@ describe('rebalanceQueue', () => {
 
         const times = updates.map((u) => u.publish_at)
         expect(times).toEqual([...times].sort((a, b) => a - b)) // монотонность
-        expect(updates.map((u) => u.sequence_number)).toEqual([1, 2, 3])
     })
 
     it('точка отсчёта — время последней публикации', async () => {

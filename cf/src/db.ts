@@ -52,7 +52,7 @@ export class Database {
         mediaJson: string | null = null
     ): Promise<void> {
         await this.run(
-            "INSERT INTO post (id, user_id, username, text, status, created_at, media) VALUES (?, ?, ?, ?, 'pending', ?, ?)",
+            "INSERT INTO post (id, user_id, username, text, status, created_at, media, sequence_number) VALUES (?, ?, ?, ?, 'pending', ?, ?, (SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM post))",
             postId,
             userId,
             username || 'unknown',
@@ -283,9 +283,7 @@ export class Database {
     async updatePostsBatch(updates: QueueUpdate[]): Promise<void> {
         if (updates.length === 0) return
         const stmts = updates.map((u) =>
-            this.d1
-                .prepare("UPDATE post SET publish_at = ?, sequence_number = ?, status = 'scheduled' WHERE id = ?")
-                .bind(u.publish_at, u.sequence_number, u.id)
+            this.d1.prepare("UPDATE post SET publish_at = ?, status = 'scheduled' WHERE id = ?").bind(u.publish_at, u.id)
         )
         for (let i = 0; i < stmts.length; i += 50) {
             await this.d1.batch(stmts.slice(i, i + 50))

@@ -1,57 +1,55 @@
-import { Bot, type Context } from 'grammy'
-import type { InlineKeyboardButton, InlineKeyboardMarkup, Message, UserFromGetMe } from '@grammyjs/types'
-import { Database } from './db'
-import type { Env } from './env'
+import {Bot, type Context} from 'grammy'
+import type {InlineKeyboardMarkup, Message, UserFromGetMe} from '@grammyjs/types'
+import {Database} from './db'
+import type {Env} from './env'
 import {
     applyAction,
     buildArticleHtml,
     feedbackChatId,
-    getPublishState,
     isRichCompatible,
     parsePostMedia,
-    postMediaCount,
     refreshAdminMessage,
     resumePublish,
     richMessageFromArticle,
 } from './bot_util'
-import { rebalanceQueue, TZ_OFFSET_MS } from './scheduler'
-import { escapeHtml, stripHtml, toHtml } from './tg'
-import type { MediaItem, PostRow } from './types'
+import {rebalanceQueue, TZ_OFFSET_MS} from './scheduler'
+import {escapeHtml, stripHtml, toHtml} from './tg'
+import type {MediaItem, PostRow} from './types'
 
 const USER_HELP = `
 <h1>Справка</h1>
-<details open><summary>Что можно отправлять</summary>
+<details open><summary>Формат цитат</summary>
+<blockquote>Текст цитаты</blockquote>
+<p>© Автор</p>
+<p><mark><b>Важно:</b> между автором и цитатой должна быть пустая строка</mark></p>
+<p><mark><b>ОЧЕНЬ ВАЖНО:</b> пожалуйста, пишите граммотно, соблюдайте пунктуацию и перед отправкой тщательно проверяйте прафильность того, что вы хотите нам отправить.</mark></p>
+<details>
+<summary>Опционально</summary>
+
+<p><b>Если в цитате или перед ней хотите указать какое-то пояснение, используйте следующий формат:</b></p>
+
+<p><i>*Текст пояснения перед цитатой (<b>курсивом</b>, это важно)*</i></p>
+<blockquote>
+Текст цитаты до пояснения<br/>
+<i>*Текст пояснения в цитате (<b>курсивом</b>, это важно)*</i><br/>
+Текст цитаты после пояснения
+</blockquote>
+
+<p><mark>Если хотите добавить пояснение в самом конце (после автора), необходимо оставить пустую строку перед ним</mark></p>
+
+</details>
+</details>
+<details><summary>Как это работает?</summary>
+<p>⟹ Отправили — модераторы проверят и оценят.</p>
+<p>⟸ Модератор может задать вопрос — отвечайте через функцию «Ответить» (Reply) на его сообщение.</p>
+<p>✅ О результате публикации сообщим отдельно.</p>
+</details>
+<details><summary>Что можно отправлять?</summary>
 <p>✍ Текст — просто напишите его.</p>
 <p>📷 Фото или видео с подписью.</p>
 <p>🖼 Альбом целиком — с одной общей подписью (если подписей несколько, альбом не примется).</p>
 <p>Подпись появится там же, где вы её оставили: над медиа или под ним.</p>
 </details>
-<details open><summary>Как это работает</summary>
-<p>⟹ Отправили — модераторы проверят и оценят.</p>
-<p>⟸ Модератор может задать вопрос — отвечайте через функцию «Ответить» (Reply) на его сообщение.</p>
-<p>✅ О результате публикации сообщим отдельно.</p>
-</details>
-<details open><summary>Формат цитат</summary>
-<blockquote>Текст цитаты</blockquote>
-<p>© Автор</p>
-<mark><b>Важно:</b> между автором и цитатой должна быть пустая строка</mark>
-<details>
-<summary>Опционально</summary>
-
-<b>Если в цитате или перед ней хотите указать какое-то пояснение, используйте следующий формат:</b>
-
-<i>*Текст пояснения перед цитатой (<b>курсивом</b>, это важно)*</i>
-<blockquote>
-Текст цитаты до пояснения
-<i>*Текст пояснения в цитате (<b>курсивом</b>, это важно)*</i>
-Текст цитаты после пояснения
-</blockquote>
-
-<mark>Если хотите добавить пояснение в самом конце (после автора), необходимо оставить пустую строку перед ним</mark>
-
-</details>
-</details>
-<details open><summary>Команды</summary>
 <p><code>/start</code> — Начать.</p>
 <p><code>/help</code> — Эта справка.</p>
 </details>
@@ -59,12 +57,12 @@ const USER_HELP = `
 
 const MODERATOR_HELP = `
 <h1>Справка модератора</h1>
-<details open><summary>Управление постом</summary>
+<details><summary>Управление постом</summary>
 <p><code>/vote [1-5]</code> — Проголосовать (если кнопки скрыты).</p>
 <p><code>/edit [текст]</code> — Изменить текст/подпись поста. Медиа не трогает.</p>
 <p><code>/remove_photo N</code> — Удалить медиа №N.</p>
 <p><code>/add_photo [N]</code> — Добавить медиа на позицию N: реплай на карточку, затем прислать фото следующим сообщением.</p>
-<p><code>/cancel_add</code> — Отменить ожидание фото для /add_photo.</p>
+<p><code>/cancel_add</code> — Отменить ожидание фото для <code>/add_photo</code>.</p>
 <p><code>/ask [текст]</code> — Задать вопрос автору.</p>
 <p><code>/schedule</code> — Одобрить и поставить в очередь публикаций.</p>
 <p><code>/reject</code> — Отклонить или убрать из очереди.</p>
@@ -72,7 +70,7 @@ const MODERATOR_HELP = `
 <p><code>/block</code> — Забанить автора навсегда.</p>
 <p><code>/use</code> — Предложка из сообщения-реплая (в т.ч. с медиа) либо из текста после команды.</p>
 </details>
-<details open><summary>Очередь и публикации</summary>
+<details><summary>Очередь и публикации</summary>
 <p><code>/queue</code> — Вся очередь публикаций.</p>
 <p><code>/waiting</code> — Посты, ожидающие оценки.</p>
 <p><code>/reschedule</code> — Пересчитать расписание заново.</p>
@@ -80,7 +78,7 @@ const MODERATOR_HELP = `
 <p><code>/reload</code> — Перерисовать карточку поста из БД.</p>
 <p><code>/resend_missing</code> — Переотправить потерянные карточки.</p>
 </details>
-<details open><summary>Приватные команды</summary>
+<details><summary>Приватные команды</summary>
 <p>Добавьте <code>_p</code> к <b>информационной</b> команде, чтобы ответ видели только Вы и чат не засорялся: 
 <br><code>/queue_p</code>, <code>/waiting_p</code>, <code>/help_p</code>.</p>
 <p>Добавьте <code>_my</code> к <code>waiting</code>, чтобы каждый получил свои неоценённые посты: 
@@ -93,7 +91,7 @@ let cachedBot: Bot | undefined
 let initPromise: Promise<Bot> | undefined
 
 function buildBot(env: Env, cachedInfo: UserFromGetMe | null): Bot {
-    const bot = cachedInfo ? new Bot(env.TOKEN, { botInfo: cachedInfo }) : new Bot(env.TOKEN)
+    const bot = cachedInfo ? new Bot(env.TOKEN, {botInfo: cachedInfo}) : new Bot(env.TOKEN)
     registerHandlers(bot, env)
     return bot
 }
@@ -191,17 +189,19 @@ function registerHandlers(bot: Bot, env: Env): void {
     async function handleHelp(ctx: Context, isPrivate: boolean): Promise<void> {
         const html = ctx.chat?.id === FB() ? MODERATOR_HELP : USER_HELP
         if (isPrivate) {
-            await ctx.deleteMessage().catch(() => {})
+            await ctx.deleteMessage().catch(() => {
+            })
             await bot.api.sendMessage(ctx.chat!.id, stripHtml(html), {
                 receiver_user_id: ctx.from!.id,
-            } as never)
+            })
             return
         }
         await bot.api.raw.sendRichMessage({
             chat_id: ctx.chat!.id,
-            rich_message: { html },
-        } as never)
+            rich_message: {html},
+        })
     }
+
     bot.command('start', async (ctx) => {
         await ctx.reply('Привет! Это бот предложки.')
         await handleHelp(ctx, false)
@@ -240,8 +240,7 @@ function registerHandlers(bot: Bot, env: Env): void {
 
         const kb: InlineKeyboardMarkup = {
             inline_keyboard: [
-                [1, 2, 3, 4, 5].map((i) => ({ text: String(i), callback_data: `v:${i}:${postId}` })),
-                [{ text: 'ОТКЛОНИТЬ', callback_data: `reject:${postId}` }],
+                [1, 2, 3, 4, 5].map((i) => ({text: String(i), callback_data: `v:${i}:${postId}`})),
             ],
         }
 
@@ -267,7 +266,7 @@ function registerHandlers(bot: Bot, env: Env): void {
                         const adminMsg = await bot.api.sendMessage(
                             FB(),
                             `<b>От @${src.username || 'unknown'}:</b>\n\n${html}\n\n📷 Медиа: ${mediaItems.length}`,
-                            { parse_mode: 'HTML', reply_markup: kb }
+                            {parse_mode: 'HTML', reply_markup: kb}
                         )
                         adminMsgId = adminMsg.message_id
                     }
@@ -277,7 +276,7 @@ function registerHandlers(bot: Bot, env: Env): void {
                     const adminMsg = await bot.api.sendMessage(
                         FB(),
                         `<b>От @${src.username || 'unknown'}:</b>\n\n${html}${mediaBadge}`,
-                        { parse_mode: 'HTML', reply_markup: kb }
+                        {parse_mode: 'HTML', reply_markup: kb}
                     )
                     adminMsgId = adminMsg.message_id
                 }
@@ -291,7 +290,7 @@ function registerHandlers(bot: Bot, env: Env): void {
 
         if (src.chatId !== FB()) {
             await bot.api.sendMessage(src.chatId, 'Пост отправлен модераторам', {
-                reply_parameters: { message_id: src.messageId },
+                reply_parameters: {message_id: src.messageId},
             })
         }
     }
@@ -320,14 +319,14 @@ function registerHandlers(bot: Bot, env: Env): void {
         const captionAbove = msg.show_caption_above_media === true
         if (msg.photo) {
             const best = msg.photo[msg.photo.length - 1]
-            return { type: 'photo', file_id: best.file_id, captionHtml, captionAbove }
+            return {type: 'photo', file_id: best.file_id, captionHtml, captionAbove}
         }
         if (msg.video?.file_id)
-            return { type: 'video', file_id: msg.video.file_id, captionHtml, captionAbove }
+            return {type: 'video', file_id: msg.video.file_id, captionHtml, captionAbove}
         if (msg.document?.file_id)
-            return { type: 'document', file_id: msg.document.file_id, captionHtml, captionAbove }
+            return {type: 'document', file_id: msg.document.file_id, captionHtml, captionAbove}
         if (msg.audio?.file_id)
-            return { type: 'audio', file_id: msg.audio.file_id, captionHtml, captionAbove }
+            return {type: 'audio', file_id: msg.audio.file_id, captionHtml, captionAbove}
         return null
     }
 
@@ -344,7 +343,7 @@ function registerHandlers(bot: Bot, env: Env): void {
                 await bot.api.sendMessage(
                     last.chat_id,
                     '⚠️ У альбома должна быть одна общая подпись или без неё.\nОтправьте альбом заново.',
-                    { reply_parameters: { message_id: last.message_id } }
+                    {reply_parameters: {message_id: last.message_id}}
                 )
                 return
             }
@@ -354,7 +353,7 @@ function registerHandlers(bot: Bot, env: Env): void {
             const media: MediaItem[] = rows.map((r, i) => ({
                 type: r.type as MediaItem['type'],
                 file_id: r.file_id,
-                ...(i === 0 && captionAbove ? { caption_above: true } : {}),
+                ...(i === 0 && captionAbove ? {caption_above: true} : {}),
             }))
 
             await submitProposal(
@@ -376,8 +375,8 @@ function registerHandlers(bot: Bot, env: Env): void {
     const PENDING_TTL_MS = 5 * 60_000
 
     function extractFileId(msg: Message): { type: 'photo' | 'video'; file_id: string } | null {
-        if (msg.photo) return { type: 'photo', file_id: msg.photo[msg.photo.length - 1].file_id }
-        if (msg.video?.file_id) return { type: 'video', file_id: msg.video.file_id }
+        if (msg.photo) return {type: 'photo', file_id: msg.photo[msg.photo.length - 1].file_id}
+        if (msg.video?.file_id) return {type: 'video', file_id: msg.video.file_id}
         return null
     }
 
@@ -414,7 +413,7 @@ function registerHandlers(bot: Bot, env: Env): void {
                 pending.beforeIndex !== null ? Math.min(Math.max(pending.beforeIndex - 1, 0), items.length) : items.length
             items.splice(insertIdx, 0, extracted)
             await db.updatePostMedia(post.id, JSON.stringify(items))
-            await refreshAdminMessage(bot, db, { env, postId: post.id })
+            await refreshAdminMessage(bot, db, {env, postId: post.id})
             await ctx.reply(`✅ Медиа добавлено на позицию ${insertIdx + 1}`)
         }
     )
@@ -442,7 +441,7 @@ function registerHandlers(bot: Bot, env: Env): void {
                         {
                             type: extracted.type,
                             file_id: extracted.file_id,
-                            ...(extracted.captionHtml ? { caption_html: extracted.captionHtml } : {}),
+                            ...(extracted.captionHtml ? {caption_html: extracted.captionHtml} : {}),
                             caption_above: extracted.captionAbove,
                         },
                     ])
@@ -462,10 +461,8 @@ function registerHandlers(bot: Bot, env: Env): void {
                 username: msg.from.username ?? '',
             })
 
-            // Весь handleUpdate уже идёт под внешним waitUntil — можно ждать напрямую
             await sleep(2200)
             const lastAt = await db.getMediaGroupLastAt(groupId)
-            // Группа ещё собирается — финализирует последний пришедший
             if (lastAt === null || Date.now() - lastAt < 1800) return
             await finalizeAlbum(groupId)
         }
@@ -482,20 +479,22 @@ function registerHandlers(bot: Bot, env: Env): void {
             const dialogue = await db.getDialogue(rtm.message_id)
             if (dialogue) {
                 const cleanChatIdAns = String(FB()).replace('-100', '')
+                const postForAnswer = await db.getPost(dialogue.post_id)
+                const displayId = postForAnswer?.sequence_number ? `#${postForAnswer.sequence_number}` : dialogue.post_id
                 const answerHtml = toHtml(msg.text ?? '', msg.entities ?? []).replace(/\n/g, '<br/>')
                 try {
                     await bot.api.raw.sendRichMessage({
                         chat_id: FB(),
                         rich_message: {
-                            html: `<h3>Ответ автора @${from.username}</h3><p><mark>По посту <a href="https://t.me/c/${cleanChatIdAns}/${dialogue.admin_msg_id}">${dialogue.post_id}</a></mark></p><hr/><p>${answerHtml}</p>`,
+                            html: `<h2>Ответ автора @${from.username}</h2><p>По посту <a href="https://t.me/c/${cleanChatIdAns}/${postForAnswer?.admin_msg_id}">${displayId}</a></p><hr/><p>${answerHtml}</p>`,
                         },
-                        reply_parameters: { message_id: dialogue.admin_msg_id },
-                    } as never)
+                        reply_parameters: {message_id: dialogue.admin_msg_id},
+                    })
                 } catch {
                     await bot.api.sendMessage(
                         FB(),
-                        `<b>Ответ автора @${from.username}</b>\nПо посту <a href="https://t.me/c/${cleanChatIdAns}/${dialogue.admin_msg_id}">${dialogue.post_id}</a>\n\n${escapeHtml(msg.text ?? '')}`,
-                        { parse_mode: 'HTML', reply_to_message_id: dialogue.admin_msg_id }
+                        `<b>Ответ автора @${from.username}</b>\nПо посту <a href="https://t.me/c/${cleanChatIdAns}/${postForAnswer?.admin_msg_id}">${displayId}</a>\n\n${escapeHtml(msg.text ?? '')}`,
+                        {parse_mode: 'HTML', reply_to_message_id: dialogue.admin_msg_id}
                     )
                 }
                 await ctx.reply('Сообщение передано')
@@ -528,7 +527,7 @@ function registerHandlers(bot: Bot, env: Env): void {
         const match = ctx.match
         if (!match) return
         try {
-            await applyAction(bot, db, { env, postId: match[1], action: 'reject' })
+            await applyAction(bot, db, {env, postId: match[1], action: 'reject'})
         } finally {
             await ctx.answerCallbackQuery('Отклонено')
         }
@@ -538,7 +537,7 @@ function registerHandlers(bot: Bot, env: Env): void {
         const match = ctx.match
         if (!match) return
         try {
-            await applyAction(bot, db, { env, postId: match[1], action: 'schedule' })
+            await applyAction(bot, db, {env, postId: match[1], action: 'schedule'})
         } finally {
             await ctx.answerCallbackQuery('В очереди')
         }
@@ -547,7 +546,7 @@ function registerHandlers(bot: Bot, env: Env): void {
     bot.command('publish').filter(inModThread, async (ctx) => {
         const post = await findPost(ctx)
         if (post) {
-            await applyAction(bot, db, { env, postId: post.id, action: 'publish_now' })
+            await applyAction(bot, db, {env, postId: post.id, action: 'publish_now'})
         }
         await ctx.deleteMessage()
     })
@@ -555,7 +554,7 @@ function registerHandlers(bot: Bot, env: Env): void {
     bot.command('schedule').filter(inModThread, async (ctx) => {
         const post = await findPost(ctx)
         if (post) {
-            await applyAction(bot, db, { env, postId: post.id, action: 'schedule' })
+            await applyAction(bot, db, {env, postId: post.id, action: 'schedule'})
         }
         await ctx.deleteMessage()
     })
@@ -563,7 +562,7 @@ function registerHandlers(bot: Bot, env: Env): void {
     bot.command('reject').filter(inModThread, async (ctx) => {
         const post = await findPost(ctx)
         if (post) {
-            await applyAction(bot, db, { env, postId: post.id, action: 'reject' })
+            await applyAction(bot, db, {env, postId: post.id, action: 'reject'})
         }
         await ctx.deleteMessage()
     })
@@ -573,7 +572,7 @@ function registerHandlers(bot: Bot, env: Env): void {
         if (!from) return
         const post = await findPost(ctx)
         if (post && (await isAdmin(from.id))) {
-            await applyAction(bot, db, { env, postId: post.id, action: 'block' })
+            await applyAction(bot, db, {env, postId: post.id, action: 'block'})
             await ctx.deleteMessage()
             await ctx.reply(`Пользователь ${post.user_id} заблокирован`)
         }
@@ -599,7 +598,7 @@ function registerHandlers(bot: Bot, env: Env): void {
             await bot.api.deleteMessage(msg.chat.id, msg.message_id)
         } catch {
             await bot.api.sendMessage(msg.chat.id, 'Введи число от 1 до 5', {
-                reply_parameters: { message_id: msg.message_id },
+                reply_parameters: {message_id: msg.message_id},
             })
         }
     }
@@ -630,7 +629,7 @@ function registerHandlers(bot: Bot, env: Env): void {
 
         const htmlContent = toHtml(trimmedContent, adjustedEntities)
         if (htmlContent) {
-            await applyAction(bot, db, { env, postId: post.id, action: 'edit', extraVal: htmlContent })
+            await applyAction(bot, db, {env, postId: post.id, action: 'edit', extraVal: htmlContent})
         }
         await bot.api.deleteMessage(msg.chat.id, msg.message_id)
     }
@@ -669,9 +668,9 @@ function registerHandlers(bot: Bot, env: Env): void {
                 sent = await bot.api.raw.sendRichMessage({
                     chat_id: Number(userIdStr),
                     rich_message: {
-                        html: `<h3>Сообщение от модератора</h3><p>${escapeHtml(text)}</p><footer><mark>Ответьте на это сообщение <b>функцией ответить / reply</b></mark></footer>`,
+                        html: `<h2>Сообщение от модератора</h2><p>${escapeHtml(text)}</p><footer><mark>Ответьте на это сообщение <b>функцией ответить / reply</b></mark></footer>`,
                     },
-                    reply_parameters: { message_id: Number(origMsgIdStr) },
+                    reply_parameters: {message_id: Number(origMsgIdStr)},
                 })
             } catch {
                 sent = await bot.api.sendMessage(
@@ -679,13 +678,13 @@ function registerHandlers(bot: Bot, env: Env): void {
                     `<b>Сообщение от модератора:</b>\n\n${escapeHtml(text)}\n\nОтветьте на это сообщение функцией ответить / reply`,
                     {
                         parse_mode: 'HTML',
-                        reply_parameters: { message_id: Number(origMsgIdStr) },
-                    } as never
+                        reply_parameters: {message_id: Number(origMsgIdStr)},
+                    }
                 )
             }
             await db.addDialogue(sent.message_id, msg.message_id, post.id)
             await bot.api.setMessageReaction(msg.chat.id, msg.message_id, [
-                { type: 'emoji', emoji: '👍' },
+                {type: 'emoji', emoji: '👍'},
             ])
         } catch (e) {
             console.error('/ask failed:', e)
@@ -711,7 +710,7 @@ function registerHandlers(bot: Bot, env: Env): void {
                             username: rtm.from.username ?? '',
                         },
                         extracted.captionHtml,
-                        JSON.stringify([{ type: extracted.type, file_id: extracted.file_id }])
+                        JSON.stringify([{type: extracted.type, file_id: extracted.file_id}])
                     )
                 } else {
                     await newProposal(rtm)
@@ -762,17 +761,18 @@ function registerHandlers(bot: Bot, env: Env): void {
         if (!(await isAdmin(ctx.from.id))) return
         const queue = await db.getScheduledQueue()
         if (queue.length === 0) {
-            const extra: Record<string, unknown> = isPrivate ? { receiver_user_id: ctx.from.id } : {}
-            if (isPrivate) await ctx.deleteMessage().catch(() => {})
+            const extra: Record<string, unknown> = isPrivate ? {receiver_user_id: ctx.from.id} : {}
+            if (isPrivate) await ctx.deleteMessage().catch(() => {
+            })
             await bot.api.raw.sendRichMessage({
                 chat_id: ctx.chat.id,
-                rich_message: { html: `<p>📭 <b>Очередь пуста</b></p>` },
+                rich_message: {html: `<p>📭 <b>Очередь пуста</b></p>`},
                 ...extra,
-            } as never)
+            })
             return
         }
         const cleanChatId = String(FB()).replace('-100', '')
-        let html = `<h3>📊 Очередь публикаций (${queue.length})</h3>`
+        let html = `<h1>📊 Очередь публикаций (${queue.length})</h1>`
         let currentDay: string | null = null
         for (const p of queue) {
             if (!p.publish_at) continue
@@ -780,36 +780,46 @@ function registerHandlers(bot: Bot, env: Env): void {
             const dayStr = `${p2(d.getUTCDate())}.${p2(d.getUTCMonth() + 1)} ${WD[(d.getUTCDay() + 6) % 7]}`
             const timeStr = `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`
             if (dayStr !== currentDay) {
-                html += `<hr/><h4>📅 ${dayStr}</h4>`
+                html += `<hr/><h2>📅 ${dayStr}</h2>`
                 currentDay = dayStr
             }
-            const linkHtml = p.admin_msg_id
-                ? `<a href="https://t.me/c/${cleanChatId}/${p.admin_msg_id}">🔗</a>`
-                : '🔘'
-            html += `<p><b>[${p.sequence_number ?? '—'}]</b> <code>${timeStr}</code> ${linkHtml} @${p.username}</p>`
+            const linkHtml = p.admin_msg_id && p.sequence_number
+                ? `<a href="https://t.me/c/${cleanChatId}/${p.admin_msg_id}">[${p.sequence_number}]</a>`
+                : '—'
+            html += `<p><b>${linkHtml}</b> <code>${timeStr}</code> — @${p.username}</p>`
         }
         if (isPrivate) {
-            await ctx.deleteMessage().catch(() => {})
-            const lines = html
-                .replace(/<h[34][^>]*>/g, '\n')
-                .replace(/<\/h[34]>/g, '\n')
-                .replace(/<hr\/?>/g, '\n────────\n')
-                .replace(/<p[^>]*>/g, '')
-                .replace(/<\/p>/g, '\n')
-                .replace(/<[^>]+>/g, '')
-                .split('\n')
-                .map((l) => l.trim())
-                .filter(Boolean)
+            await ctx.deleteMessage().catch(() => {
+            })
+            const lines = [`<b>📊 Очередь публикаций (${queue.length})</b>`]
+            let pDay: string | null = null
+            for (const p of queue) {
+                if (!p.publish_at) continue
+                const d = localDate(p.publish_at)
+                const dayStr = `${p2(d.getUTCDate())}.${p2(d.getUTCMonth() + 1)} ${WD[(d.getUTCDay() + 6) % 7]}`
+                const timeStr = `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`
+                if (dayStr !== pDay) {
+                    lines.push(`\n📅 <b>${dayStr}</b>`)
+                    pDay = dayStr
+                }
+                const link = p.admin_msg_id && p.sequence_number
+                    ? `<a href="https://t.me/c/${cleanChatId}/${p.admin_msg_id}">[${p.sequence_number}]</a>`
+                    : '—'
+                lines.push(`<b>${link}</b> <code>${timeStr}</code> @${p.username}`)
+            }
             await bot.api.sendMessage(ctx.chat.id, lines.join('\n'), {
+                parse_mode: 'HTML',
+                link_preview_options: {is_disabled: true},
                 receiver_user_id: ctx.from.id,
-            } as never)
+            })
             return
         }
         await bot.api.raw.sendRichMessage({
             chat_id: ctx.chat.id,
-            rich_message: { html },
-        } as never)
+            rich_message: {html},
+        })
     }
+
     bot.command('queue').filter(async (ctx) => !!ctx.from && (await isAdmin(ctx.from.id)), async (ctx) => handleQueue(ctx, false))
     bot.command('queue_p').filter(async (ctx) => !!ctx.from && (await isAdmin(ctx.from.id)), async (ctx) => handleQueue(ctx, true))
     bot.hears(/^\/queue(?:@\w+)?_p\b/, async (ctx) => {
@@ -820,19 +830,20 @@ function registerHandlers(bot: Bot, env: Env): void {
     async function handleWaiting(ctx: Context, isPrivate: boolean): Promise<void> {
         if (!ctx.chat || !ctx.from) return
         if (!(await isAdmin(ctx.from.id))) return
-        const pending = await db.getFilteredPosts({ status: 'pending', limit: 20 })
+        const pending = await db.getFilteredPosts({status: 'pending', limit: 20})
         if (pending.length === 0) {
             if (isPrivate) {
-                await ctx.deleteMessage().catch(() => {})
+                await ctx.deleteMessage().catch(() => {
+                })
                 await bot.api.sendMessage(ctx.chat.id, '✅ <b>Очередь оценки пуста</b>', {
                     parse_mode: 'HTML',
                     receiver_user_id: ctx.from.id,
-                } as never)
+                })
             } else {
                 await bot.api.raw.sendRichMessage({
                     chat_id: ctx.chat.id,
-                    rich_message: { html: `<p>✅ <b>Очередь оценки пуста</b></p>` },
-                } as never)
+                    rich_message: {html: `<p>✅ <b>Очередь оценки пуста</b></p>`},
+                })
             }
             return
         }
@@ -848,7 +859,8 @@ function registerHandlers(bot: Bot, env: Env): void {
         try {
             const admins = await bot.api.getChatAdministrators(FB())
             adminUsernames = admins.filter((m) => !m.user.is_bot && m.user.username).map((m) => m.user.username!)
-        } catch {}
+        } catch {
+        }
         let html: string
         if (!isPrivate) {
             const byAuthor = new Map<string, typeof pending>()
@@ -857,88 +869,110 @@ function registerHandlers(bot: Bot, env: Env): void {
                 arr.push(p)
                 byAuthor.set(p.username, arr)
             }
-            html = `<h3>⏳ Ожидают оценки (${pending.length})</h3>`
+            html = `<h1>⏳ Ожидают оценки (${pending.length})</h1>`
             for (const [username, posts] of byAuthor) {
-                html += `<h4>@${username}</h4>`
+                html += `<h2>@${username}</h2>`
                 if (posts.length === 1) {
                     const p = posts[0]
                     const d = localDate(p.created_at)
                     const dateStr = `${p2(d.getUTCDate())}.${p2(d.getUTCMonth() + 1)} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`
-                    if (p.admin_msg_id) {
+                    if (p.admin_msg_id && p.sequence_number) {
                         const url = `https://t.me/c/${cleanChatId}/${p.admin_msg_id}`
-                        html += `<p>🔗 <a href="${url}">${url}</a> — ${dateStr}</p>`
+                        html += `<p><a href="${url}">[${p.sequence_number}]</a> — ${dateStr}</p>`
                     } else {
                         html += `<p>🔘 — ${dateStr}</p>`
                     }
                     const voted = votesByPost.get(p.id) ?? new Set<string>()
                     const notRated = adminUsernames.filter((u) => !voted.has(u))
                     if (notRated.length > 0) {
-                        html += `<p><mark>не оценили: ${notRated.map((u) => `@${u}`).join(', ')}</mark></p>`
+                        html += `<p>не оценили: ${notRated.map((u) => `@${u}`).join(', ')}</p>`
                     }
-            } else {
-                let i = 0
-                html += `<ol>`
-                for (const p of posts) {
-                    i++
+                } else {
+                    let i = 0
+                    html += `<ol>`
+                    for (const p of posts) {
+                        i++
+                        const d = localDate(p.created_at)
+                        const dateStr = `${p2(d.getUTCDate())}.${p2(d.getUTCMonth() + 1)} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`
+                        html += `<li value="${i}">`
+                        if (p.admin_msg_id) {
+                            const url = `https://t.me/c/${cleanChatId}/${p.admin_msg_id}`
+                            html += `<a href="${url}">${cleanChatId}-${p.admin_msg_id}</a> — ${dateStr}`
+                        } else {
+                            html += `🔘 — ${dateStr}`
+                        }
+                        const voted = votesByPost.get(p.id) ?? new Set<string>()
+                        const notRated = adminUsernames.filter((u) => !voted.has(u))
+                        if (notRated.length > 0) {
+                            html += `<br>не оценили: ${notRated.map((u) => `@${u}`).join(', ')}`
+                        }
+                        html += `</li>`
+                    }
+                    html += `</ol>`
+                }
+            }
+        } else {
+            const lines: string[] = [`<b>⏳ Ожидают оценки (${pending.length})</b>`]
+            const byAuthorElse = new Map<string, typeof pending>()
+            for (const p of [...pending].reverse()) {
+                const arr = byAuthorElse.get(p.username) ?? []
+                arr.push(p)
+                byAuthorElse.set(p.username, arr)
+            }
+            for (const [username, posts] of byAuthorElse) {
+                lines.push(`\n<b>@${username}</b>`)
+                if (posts.length === 1) {
+                    const p = posts[0]
                     const d = localDate(p.created_at)
                     const dateStr = `${p2(d.getUTCDate())}.${p2(d.getUTCMonth() + 1)} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`
-                    html += `<li value="${i}">`
-                    if (p.admin_msg_id) {
-                        const url = `https://t.me/c/${cleanChatId}/${p.admin_msg_id}`
-                        html += `<a href="${url}">${cleanChatId}-${p.admin_msg_id}</a> — ${dateStr}`
-                    } else {
-                        html += `🔘 — ${dateStr}`
-                    }
+                    const link = p.admin_msg_id && p.sequence_number
+                        ? `<a href="https://t.me/c/${cleanChatId}/${p.admin_msg_id}">[${p.sequence_number}]</a>`
+                        : '🔘'
+                    lines.push(`${link} — ${dateStr}`)
                     const voted = votesByPost.get(p.id) ?? new Set<string>()
                     const notRated = adminUsernames.filter((u) => !voted.has(u))
                     if (notRated.length > 0) {
-                        html += `<br><mark>не оценили: ${notRated.map((u) => `@${u}`).join(', ')}</mark>`
+                        lines.push(`не оценили: ${notRated.map((u) => `@${u}`).join(', ')}`)
                     }
-                    html += `</li>`
+                } else {
+                    let i = 0
+                    for (const p of posts) {
+                        i++
+                        const d = localDate(p.created_at)
+                        const dateStr = `${p2(d.getUTCDate())}.${p2(d.getUTCMonth() + 1)} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`
+                        const link = p.admin_msg_id && p.sequence_number
+                            ? `<a href="https://t.me/c/${cleanChatId}/${p.admin_msg_id}">[${p.sequence_number}]</a>`
+                            : '🔘'
+                        lines.push(`${i}. ${link} — ${dateStr}`)
+                    }
+                    const allNotRated = new Set<string>()
+                    for (const p of posts) {
+                        const voted = votesByPost.get(p.id) ?? new Set<string>()
+                        for (const u of adminUsernames) if (!voted.has(u)) allNotRated.add(u)
+                    }
+                    if (allNotRated.size > 0) {
+                        lines.push(`не оценили: ${[...allNotRated].map((u) => `@${u}`).join(', ')}`)
+                    }
                 }
-                html += `</ol>`
             }
-            }
-        } else {
-            html = `<h3>⏳ Ожидают оценки (${pending.length})</h3>`
-            for (const p of [...pending].reverse()) {
-                const d = localDate(p.created_at)
-                const dateStr = `${p2(d.getUTCDate())}.${p2(d.getUTCMonth() + 1)} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`
-                const linkHtml = p.admin_msg_id
-                    ? `<a href="https://t.me/c/${cleanChatId}/${p.admin_msg_id}">🔗</a>`
-                    : '🔘'
-                html += `<p>${linkHtml} @${p.username} — ${dateStr}</p>`
-                const voted = votesByPost.get(p.id) ?? new Set<string>()
-                const notRated = adminUsernames.filter((u) => !voted.has(u))
-                if (notRated.length > 0) {
-                    html += `<p><mark>не оценили: ${notRated.map((u) => `@${u}`).join(', ')}</mark></p>`
-                }
-                html += `<p> </p>`
-            }
+            html = lines.join('\n')
         }
         if (isPrivate) {
-            await ctx.deleteMessage().catch(() => {})
-            const plain = html
-                .replace(/<h4[^>]*>/g, '\n')
-                .replace(/<\/h4>/g, '\n')
-                .replace(/<p[^>]*>/g, '')
-                .replace(/<\/p>/g, '\n')
-                .replace(/<[^>]+>/g, '')
-                .split('\n')
-                .map((l) => l.trim())
-                .filter(Boolean)
-                .join('\n')
-            await bot.api.sendMessage(ctx.chat.id, plain, {
-                link_preview_options: { is_disabled: true },
+            await ctx.deleteMessage().catch(() => {
+            })
+            await bot.api.sendMessage(ctx.chat.id, html, {
+                parse_mode: 'HTML',
+                link_preview_options: {is_disabled: true},
                 receiver_user_id: ctx.from.id,
-            } as never)
+            })
             return
         }
         await bot.api.raw.sendRichMessage({
             chat_id: ctx.chat.id,
-            rich_message: { html },
-        } as never)
+            rich_message: {html},
+        })
     }
+
     bot.command('waiting').filter(async (ctx) => !!ctx.from && (await isAdmin(ctx.from.id)), async (ctx) => handleWaiting(ctx, false))
     bot.command('waiting_p').filter(async (ctx) => !!ctx.from && (await isAdmin(ctx.from.id)), async (ctx) => handleWaiting(ctx, true))
     bot.hears(/^\/waiting(?:@\w+)?_p\b/, async (ctx) => {
@@ -948,7 +982,7 @@ function registerHandlers(bot: Bot, env: Env): void {
     bot.hears(/^\/waiting_my(?:@\w+)?\b/, async (ctx) => {
         if (!ctx.from || !(await isAdmin(ctx.from.id))) return
         if (!ctx.chat) return
-        const pending = await db.getFilteredPosts({ status: 'pending', limit: 20 })
+        const pending = await db.getFilteredPosts({status: 'pending', limit: 20})
         const votes = await db.getVotesForPosts(pending.map((p) => p.id))
         const votesByPost = new Map<string, Set<string>>()
         for (const v of votes) {
@@ -961,10 +995,12 @@ function registerHandlers(bot: Bot, env: Env): void {
             const members = await bot.api.getChatAdministrators(FB())
             admins = members
                 .filter((m) => !m.user.is_bot && m.user.username)
-                .map((m) => ({ id: m.user.id, username: m.user.username! }))
-        } catch {}
+                .map((m) => ({id: m.user.id, username: m.user.username!}))
+        } catch {
+        }
         const cleanChatId = String(FB()).replace('-100', '')
-        await ctx.deleteMessage().catch(() => {})
+        await ctx.deleteMessage().catch(() => {
+        })
         for (const admin of admins) {
             const personal = pending.filter((p) => !(votesByPost.get(p.id)?.has(admin.username)))
             if (personal.length === 0) continue
@@ -972,22 +1008,23 @@ function registerHandlers(bot: Bot, env: Env): void {
             for (const p of [...personal].reverse()) {
                 const d = localDate(p.created_at)
                 const dateStr = `${p2(d.getUTCDate())}.${p2(d.getUTCMonth() + 1)} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`
-                const linkHtml = p.admin_msg_id
-                    ? `<a href="https://t.me/c/${cleanChatId}/${p.admin_msg_id}">🔗</a>`
-                    : '🔘'
+                const linkHtml = p.admin_msg_id && p.sequence_number
+                    ? `<a href="https://t.me/c/${cleanChatId}/${p.admin_msg_id}">[${p.sequence_number}]</a>`
+                    : '—'
                 lines.push(`${linkHtml} @${p.username} — ${dateStr}`)
             }
             await bot.api.sendMessage(FB(), lines.join('\n'), {
                 parse_mode: 'HTML',
-                link_preview_options: { is_disabled: true },
+                link_preview_options: {is_disabled: true},
                 receiver_user_id: admin.id,
-            } as never)
+            })
         }
     })
 
     bot.command('reschedule').filter(async (ctx) => !!ctx.from && (await isAdmin(ctx.from.id)), async (ctx) => {
         await rebalanceQueue(db)
-        await ctx.deleteMessage().catch(() => {})
+        await ctx.deleteMessage().catch(() => {
+        })
         const queue = await db.getScheduledQueue()
         if (queue.length === 0) {
             await bot.api.sendMessage(ctx.chat!.id, '📭 <b>Очередь пуста</b> — обновлена', {
@@ -1014,7 +1051,7 @@ function registerHandlers(bot: Bot, env: Env): void {
         }
         await bot.api.sendMessage(ctx.chat!.id, lines.join('\n'), {
             parse_mode: 'HTML',
-            link_preview_options: { is_disabled: true },
+            link_preview_options: {is_disabled: true},
         })
     })
 
@@ -1027,8 +1064,7 @@ function registerHandlers(bot: Bot, env: Env): void {
         const built = isRichCompatible(mediaItems) ? buildArticleHtml(post.text, mediaItems) : null
         const kb: InlineKeyboardMarkup = {
             inline_keyboard: [
-                [1, 2, 3, 4, 5].map((i) => ({ text: String(i), callback_data: `v:${i}:${post.id}` })),
-                [{ text: 'ОТКЛОНИТЬ', callback_data: `reject:${post.id}` }],
+                [1, 2, 3, 4, 5].map((i) => ({text: String(i), callback_data: `v:${i}:${post.id}`})),
             ],
         }
         let adminMsgId: number | undefined
@@ -1050,7 +1086,7 @@ function registerHandlers(bot: Bot, env: Env): void {
                         const adminMsg = await bot.api.sendMessage(
                             FB(),
                             `<b>От @${post.username || 'unknown'}:</b>\n\n${post.text}\n\n📷 Медиа: ${mediaItems.length}`,
-                            { parse_mode: 'HTML', reply_markup: kb }
+                            {parse_mode: 'HTML', reply_markup: kb}
                         )
                         adminMsgId = adminMsg.message_id
                     }
@@ -1058,7 +1094,7 @@ function registerHandlers(bot: Bot, env: Env): void {
                     const adminMsg = await bot.api.sendMessage(
                         FB(),
                         `<b>От @${post.username || 'unknown'}:</b>\n\n${post.text}`,
-                        { parse_mode: 'HTML', reply_markup: kb }
+                        {parse_mode: 'HTML', reply_markup: kb}
                     )
                     adminMsgId = adminMsg.message_id
                 }
@@ -1082,7 +1118,8 @@ function registerHandlers(bot: Bot, env: Env): void {
             try {
                 await resendMissingForPost(post)
                 ok++
-            } catch {}
+            } catch {
+            }
         }
         await ctx.reply(`♻️ Переотправлено ${ok}/${missing.length} карточек`)
     })
@@ -1091,11 +1128,12 @@ function registerHandlers(bot: Bot, env: Env): void {
         if (!ctx.from || !(await isAdmin(ctx.from.id))) return
         const post = await findPost(ctx)
         if (!post) return
-        await refreshAdminMessage(bot, db, { env, postId: post.id })
-        await ctx.deleteMessage().catch(() => {})
+        await refreshAdminMessage(bot, db, {env, postId: post.id})
+        await ctx.deleteMessage().catch(() => {
+        })
         await bot.api.sendMessage(ctx.chat!.id, 'Карточка обновлена', {
             receiver_user_id: ctx.from.id,
-        } as never)
+        })
     })
 
     bot.command('remove_photo').filter(inModThread, async (ctx) => {
@@ -1116,7 +1154,7 @@ function registerHandlers(bot: Bot, env: Env): void {
         }
         items.splice(n - 1, 1)
         await db.updatePostMedia(post.id, JSON.stringify(items))
-        await refreshAdminMessage(bot, db, { env, postId: post.id })
+        await refreshAdminMessage(bot, db, {env, postId: post.id})
         await ctx.deleteMessage()
     })
 

@@ -65,7 +65,7 @@ export function getUserFromData(initData: string): TgWebAppUser {
     }
 }
 
-const ADMIN_TTL_MS = 600_000 // 10 минут
+const ADMIN_TTL_MS = 600_000
 const adminCache: { count: number; expiresAt: number } = { count: 1, expiresAt: 0 }
 
 export async function getAdminCount(bot: Bot, env: Env): Promise<number> {
@@ -89,7 +89,6 @@ export interface Analytics {
     is_rejected: boolean
 }
 
-/** Чистый расчёт без обращений к БД/API. */
 export function calculateAnalytics(votesRows: VoteRow[], totalAdmins: number): Analytics {
     const scores = votesRows.map((v) => v.vote)
     const votesList = votesRows.map((v) => `@${v.admin_username}: ${v.vote}`).join(', ')
@@ -135,8 +134,6 @@ export async function applyAction(bot: Bot, db: Database, opts: ActionOpts): Pro
             }
             const totalAdmins = await getAdminCount(bot, env)
 
-            // Сериализация через ModerationHub: пересчёт и смена статуса
-            // выполняются атомарно относительно других голосов этого поста
             const hubId = env.MODERATION.idFromName(postId)
             const res = await env.MODERATION.get(hubId).fetch('https://moderation.internal/vote', {
                 method: 'POST',
@@ -178,10 +175,10 @@ export async function applyAction(bot: Bot, db: Database, opts: ActionOpts): Pro
 }
 
 const STATUS_MAP: Record<string, string> = {
-    pending: '⏳ В ОЖИДАНИИ',
-    scheduled: '📅 ОДОБРЕНО (В очереди)',
-    rejected: '❌ ОТКЛОНЕНО',
-    published: '✅ ОПУБЛИКОВАНО',
+    pending: '⏳ В ожидании',
+    scheduled: '📅 Одобрено (в очереди)',
+    rejected: '❌ Отклонено',
+    published: '✅ Опубликовано',
 }
 
 type InlineButton = { text: string; callback_data: string } | { text: string; copy_text: { text: string } }
@@ -191,7 +188,6 @@ function getAdminKeyboard(postId: string, isFinal: boolean): { inline_keyboard: 
     if (!isFinal) {
         rows.push([1, 2, 3, 4, 5].map((i) => ({ text: String(i), callback_data: `v:${i}:${postId}` })))
     }
-    rows.push([{ text: 'ОТКЛОНИТЬ', callback_data: `reject:${postId}` }])
     return { inline_keyboard: rows }
 }
 
